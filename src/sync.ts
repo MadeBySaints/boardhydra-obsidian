@@ -1,7 +1,7 @@
 import { App, Notice, TAbstractFile, TFile, TFolder, normalizePath, parseYaml, stringifyYaml } from 'obsidian'
 import { Api, ApiError } from './api'
-import { BoardCtx, Yaml, noteToPatch, parseIndex, parseNote, posBetween, renderCard, renderIndex, safeName } from './format'
-import type { BHCard, BHEvent, BHSnapshot, CardPatch } from './types'
+import { BoardCtx, Yaml, noteToPatch, parseIndex, parseNote, posBetween, renderBoardNote, renderCard, renderIndex, renderListNote, safeName, wikiLink } from './format'
+import type { BHCard, BHEvent, BHList, BHSnapshot, CardPatch } from './types'
 
 export interface Settings {
   server: string
@@ -12,12 +12,15 @@ export interface Settings {
   root: string // vault folder for everything
   folders: Record<string, string> // board id → its folder name (kept when the board is renamed)
   clientId: string
+  kanban: boolean // also write <board>/_Kanban.md (Kanban plugin format; it links to every card)
 }
 
 const yaml: Yaml = { parse: parseYaml, stringify: stringifyYaml }
 const PUSH_DELAY = 2000
 const ARCHIVE = '_archive'
 const CONFLICTS = '_conflicts'
+const LISTS = 'Lists'
+const KANBAN = '_Kanban'
 
 export function genId(): string {
   const b = new Uint8Array(12)
@@ -125,7 +128,25 @@ export class SyncEngine {
   }
 
   private ctx(st: BoardState): BoardCtx {
-    return { lists: st.snap.lists, labels: st.snap.labels, members: st.snap.members }
+    const paths = this.listPaths(st)
+    return {
+      lists: st.snap.lists, labels: st.snap.labels, members: st.snap.members,
+      listLink: (l: BHList) => { const p = paths.get(l.id); return p ? wikiLink(p.replace(/\.md$/, ''), l.name) : l.name },
+    }
+  }
+
+  /** open list id → its note's path, in board order (names made unique) */
+  private listPaths(st: BoardState): Map<string, string> {
+    const out = new Map<string, string>()
+    const used = new Set<string>()
+    for (const l of st.snap.lists.filter((x) => !x.closed).sort((a, b) => a.pos - b.pos)) {
+      const base = safeName(l.name)
+      let p = ''
+      for (let n = 1; !p || used.has(p.toLowerCase()); n++) p = normalizePath(`${st.folder}/${LISTS}/${n === 1 ? base : `${base} (${n})`}.md`)
+      used.add(p.toLowerCase())
+      out.set(l.id, p)
+    }
+    return out
   }
 
   private async ensureFolder(path: string) {
@@ -206,7 +227,9 @@ export class SyncEngine {
     }
     if (!path || !this.app.vault.getAbstractFileByPath(path)) path = want
     this.pathById.set(c.id, path)
-    await this.write(path, renderCard(c, this.ctx(st), yaml))
+    const f = this.app.vault.getAbstractFileByPath(path)
+    const existing = f instanceof TFile ? parseNote(await this.app.vault.read(f), yaml).fm : {} // keep the user's own properties and tags
+    await this.write(path, renderCard(c, this.ctx(st), yaml, existing))
   }
 
   private async archiveLocal(cardId: string, path: string) {
@@ -220,14 +243,41 @@ export class SyncEngine {
     await this.move(path, to)
   }
 
-  private indexPath(st: BoardState) {
+  /** the board's own note: BoardHydra/<board>.md, linking to its lists */
+  private boardNotePath(st: BoardState) {
     return normalizePath(`${this.root()}/${this.s().folders[st.id]}.md`)
   }
 
+  /** the optional Kanban-plugin note (links to every card, so it's off by default to keep the graph a tree) */
+  private indexPath(st: BoardState) {
+    return normalizePath(`${st.folder}/${KANBAN}.md`)
+  }
+
+  /** Board note → list notes → cards (cards link back through `list:`), plus the Kanban note if turned on. */
   private async writeIndex(st: BoardState) {
-    const cards = [...st.cards.values()].filter((c) => !c.closed && this.pathById.has(c.id))
-    const text = renderIndex(st.id, st.snap.lists, cards, (c) => this.pathById.get(c.id)!.replace(/\.md$/, ''))
-    await this.write(this.indexPath(st), text)
+    const cards = [...st.cards.values()].filter((c) => !c.closed && this.pathById.has(c.id)).sort((a, b) => a.pos - b.pos)
+    const link = (p: string, label: string) => wikiLink(p.replace(/\.md$/, ''), label)
+    const paths = this.listPaths(st)
+    const lists = st.snap.lists.filter((l) => paths.has(l.id)).sort((a, b) => a.pos - b.pos)
+    const boardPath = this.boardNotePath(st)
+    await this.write(boardPath, renderBoardNote(st.id, st.snap.board.name, st.snap.board.desc ?? '', lists.map((l) => ({ link: link(paths.get(l.id)!, l.name) }))))
+    await this.ensureFolder(`${st.folder}/${LISTS}`)
+    for (const l of lists) {
+      const inList = cards.filter((c) => c.idList === l.id).map((c) => ({ link: link(this.pathById.get(c.id)!, c.name), done: c.dueComplete }))
+      await this.write(paths.get(l.id)!, renderListNote(st.id, l, link(boardPath, st.snap.board.name), inList))
+    }
+    // list notes for lists that are gone or renamed
+    const keep = new Set(paths.values())
+    const dir = this.app.vault.getAbstractFileByPath(normalizePath(`${st.folder}/${LISTS}`))
+    if (dir instanceof TFolder) {
+      for (const f of [...dir.children]) {
+        if (!(f instanceof TFile) || keep.has(f.path)) continue
+        if (parseNote(await this.app.vault.read(f), yaml).fm.bh_kind === 'list') await this.app.fileManager.trashFile(f)
+      }
+    }
+    if (this.s().kanban) {
+      await this.write(this.indexPath(st), renderIndex(st.id, st.snap.lists, cards, (c) => this.pathById.get(c.id)!.replace(/\.md$/, '')))
+    }
   }
 
   private scheduleIndex(st: BoardState) {
@@ -331,6 +381,7 @@ export class SyncEngine {
   }
 
   private boardForIndex(path: string): BoardState | undefined {
+    if (!this.s().kanban) return undefined
     for (const st of this.boards.values()) if (this.indexPath(st) === path) return st
     return undefined
   }
@@ -355,8 +406,8 @@ export class SyncEngine {
   }
 
   private schedule(path: string) {
-    const st = this.boardForPath(path)
-    const idx = st ? undefined : this.boardForIndex(path)
+    const idx = this.boardForIndex(path)
+    const st = idx ? undefined : this.boardForPath(path)
     if (!st && !idx) return
     const id = this.idForPath(path)
     if (id) this.pending.add(id)
@@ -385,6 +436,7 @@ export class SyncEngine {
     const card = id ? st.cards.get(id) ?? null : null
     if (id && !card) return // not on this board any more (archived or moved); nothing to update
     if (!id && !text.trim()) return // a fresh empty note: wait until it has something
+    if (!id && f.basename.startsWith('_')) return // the plugin's own notes (_Kanban) are never cards
     const { patch, warnings } = noteToPatch(parsed, f.basename, card, this.ctx(st), genId)
     if (warnings.length) new Notice('BoardHydra: ' + warnings.join(' · '), 8000)
 

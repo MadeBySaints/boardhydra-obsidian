@@ -1,6 +1,6 @@
 // The parts of the BoardHydra API (/api/v1) the plugin uses.
 
-export interface BHBoard { id: string; name: string; role?: string }
+export interface BHBoard { id: string; name: string; desc?: string; role?: string }
 
 export interface BHList { id: string; idBoard: string; name: string; pos: number; closed: boolean }
 

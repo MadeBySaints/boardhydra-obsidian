@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
 import { parse, stringify } from 'yaml'
-import { noteToPatch, parseIndex, parseNote, posBetween, renderCard, renderIndex, safeName } from '../src/format'
+import { labelTag, noteToPatch, parseIndex, parseNote, posBetween, renderBoardNote, renderCard, renderIndex, renderListNote, safeName, unlink } from '../src/format'
 import type { BHCard } from '../src/types'
 
 const yaml = { parse: (s: string) => parse(s), stringify: (o: any) => stringify(o) }
@@ -13,7 +13,7 @@ const ctx = {
     { id: 'l1', idBoard: 'b', name: 'To do', pos: 65536, closed: false },
     { id: 'l2', idBoard: 'b', name: 'Done', pos: 131072, closed: false },
   ],
-  labels: [{ id: 'g', idBoard: 'b', name: 'Bug', color: 'red', pos: 1 }],
+  labels: [{ id: 'g', idBoard: 'b', name: 'Bug', color: 'red', pos: 1 }, { id: 'h', idBoard: 'b', name: 'High priority', color: 'orange', pos: 2 }],
   members: [{ id: 'u1', fullName: 'Sam Lee', username: 'sam' }],
 }
 
@@ -47,7 +47,7 @@ test('a rendered card parses back to no changes', () => {
 test('edits become a patch', () => {
   let text = renderCard(card, ctx, yaml)
   text = text.replace('Some **notes**', 'New text').replace('- [ ] two', '- [x] two').replace('list: To do', 'list: done')
-  text = text.replace('labels:\n  - Bug', 'labels:\n  - Bug\n  - Nope')
+  text = text.replace('tags:\n  - bh/Bug', 'tags:\n  - bh/Bug\n  - bh/Nope\n  - my-own-tag')
   text += '- [Other](https://example.org)\n'
   const { patch, warnings } = noteToPatch(parseNote(text, yaml), safeName(card.name), card, ctx, genId)
   assert.equal(patch.desc, 'New text')
@@ -97,4 +97,54 @@ test('positions between neighbours', () => {
   assert.equal(posBetween(100, 200), 150)
   assert.equal(posBetween(undefined, 100), 50)
   assert.equal(posBetween(100, undefined), 65636)
+})
+
+const linked = { ...ctx, listLink: (l: { name: string }) => `[[BoardHydra/B/Lists/${l.name}|${l.name}]]` }
+
+test('labels are bh/ tags, members and the list are links', () => {
+  const text = renderCard(card, linked, yaml)
+  assert.match(text, /tags:\n {2}- bh\/Bug\n/)
+  assert.match(text, /members:\n {2}- "\[\[Sam Lee\]\]"/)
+  assert.match(text, /list: "\[\[BoardHydra\/B\/Lists\/To do\|To do\]\]"/)
+  assert.deepEqual(noteToPatch(parseNote(text, yaml), safeName(card.name), card, linked, genId).patch, {})
+  assert.equal(labelTag(ctx.labels[1]), 'bh/High-priority')
+})
+
+test('tags and links edited in Obsidian', () => {
+  let text = renderCard(card, linked, yaml)
+  text = text.replace('  - bh/Bug', '  - "#bh/high-priority"').replace('list: "[[BoardHydra/B/Lists/To do|To do]]"', 'list: [[BoardHydra/B/Lists/Done|Done]]')
+  text = text.replace('  - "[[Sam Lee]]"', '  - "[[People/sam|sam]]"')
+  const { patch, warnings } = noteToPatch(parseNote(text, yaml), safeName(card.name), card, linked, genId)
+  assert.deepEqual(patch.idLabels, ['h'])
+  assert.equal(patch.idList, 'l2') // unquoted link: YAML reads it as a nested list
+  assert.equal(patch.idMembers, undefined) // same member, by username
+  assert.deepEqual(warnings, [])
+})
+
+test("the user's own tags and properties survive a sync", () => {
+  const first = renderCard(card, linked, yaml)
+  const mine = first.replace('  - bh/Bug', '  - bh/Bug\n  - idea').replace('done: false', 'done: false\nrating: 5')
+  const again = renderCard({ ...card, idLabels: [] }, linked, yaml, parseNote(mine, yaml).fm)
+  const fm = parseNote(again, yaml).fm
+  assert.deepEqual(fm.tags, ['idea'])
+  assert.equal(fm.rating, 5)
+})
+
+test('0.1.0 notes with labels: still work', () => {
+  const old = renderCard(card, ctx, yaml).replace(/tags:\n {2}- bh\/Bug\n/, 'labels:\n  - Bug\n')
+  assert.deepEqual(noteToPatch(parseNote(old, yaml), safeName(card.name), card, ctx, genId).patch, {})
+})
+
+test('unlink', () => {
+  assert.equal(unlink('[[a/b/To do|To do]]'), 'To do')
+  assert.equal(unlink('[[a/b/Done]]'), 'Done')
+  assert.equal(unlink(' plain '), 'plain')
+})
+
+test('board and list notes link down the tree', () => {
+  const b = renderBoardNote('b', 'B', '', [{ link: '[[BoardHydra/B/Lists/To do|To do]]' }])
+  assert.match(b, /## Lists\n- \[\[BoardHydra\/B\/Lists\/To do\|To do\]\]/)
+  const l = renderListNote('b', ctx.lists[0], '[[BoardHydra/B|B]]', [{ link: '[[BoardHydra/B/Fix- login|Fix: login]]', done: false }])
+  assert.match(l, /Board: \[\[BoardHydra\/B\|B\]\]/)
+  assert.match(l, /- \[ \] \[\[BoardHydra\/B\/Fix- login\|Fix: login\]\]/)
 })

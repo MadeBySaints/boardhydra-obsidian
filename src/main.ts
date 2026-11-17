@@ -12,6 +12,7 @@ const DEFAULTS: Settings = {
   root: 'BoardHydra',
   folders: {},
   clientId: '',
+  kanban: false,
 }
 
 export default class BoardHydraPlugin extends Plugin {
@@ -167,8 +168,12 @@ class BoardHydraSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName('Sync').setHeading()
     new Setting(containerEl)
       .setName('Folder')
-      .setDesc('Where board folders go in this vault. Each card is a note; each board also gets a Kanban note.')
+      .setDesc('Where board folders go in this vault. Each board, list and card gets a note, linked board → lists → cards.')
       .addText((t) => t.setValue(s.root).onChange(async (v) => { s.root = v.trim() || 'BoardHydra'; await p.saveSettings() }))
+    new Setting(containerEl)
+      .setName('Kanban note')
+      .setDesc('Also write a _Kanban note per board for the Kanban plugin, where dragging a card moves it. It links to every card, so the graph gets busier.')
+      .addToggle((t) => t.setValue(s.kanban).onChange(async (on) => { s.kanban = on; await p.saveSettings(); await p.engine.restart() }))
     new Setting(containerEl)
       .setName('Sync now')
       .setDesc(p.status.text || 'Reloads every chosen board (one request each).')

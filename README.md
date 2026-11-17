@@ -1,7 +1,8 @@
 # BoardHydra for Obsidian
 
-Sync your [BoardHydra](https://boardhydra.com) boards with your vault, both ways. Each card becomes a note,
-and each board gets a Kanban note. Needs BoardHydra **Pro** or **Business**.
+Sync your [BoardHydra](https://boardhydra.com) boards with your vault, both ways. Each board, list and card becomes
+a note, linked board → lists → cards, so the graph view shows your boards as trees. Labels become `#bh/…` tags.
+Needs BoardHydra **Pro** or **Business**.
 
 ## Connect
 1. Install the plugin and turn it on.
@@ -14,12 +15,17 @@ Disconnect any time in the plugin settings, or on the website under Account → 
 ## What you get
 ```
 BoardHydra/
-  My board.md            ← Kanban note (works with the Kanban plugin)
+  My board.md            ← the board: links to its lists
   My board/
-    Fix login.md         ← one note per card
+    Lists/
+      To do.md           ← a list: links to its board and its cards
+    Fix login.md         ← one note per card (links back to its list)
+    _Kanban.md           ← optional, for the Kanban plugin (Settings → Kanban note)
     _archive/            ← cards archived in BoardHydra
     _conflicts/          ← your version, when both sides changed a card at once
 ```
+
+Board and list notes are rewritten by the plugin; edit cards, not them.
 
 A card note:
 ```markdown
@@ -27,9 +33,9 @@ A card note:
 bh_id: 6f1c…            # don't edit
 bh_board: 2a9e…
 bh_updated: 2026-11-17T10:00:00Z
-list: To do
-labels: [Bug]
-members: [Sam Lee]
+list: "[[BoardHydra/My board/Lists/To do|To do]]"
+tags: [bh/Bug, idea]
+members: ["[[Sam Lee]]"]
 start: 
 due: 2026-11-21T17:00:00Z
 done: false
@@ -47,7 +53,11 @@ The description, in Markdown.
 
 - **Edit a note**: the card updates in BoardHydra about 2 seconds after you stop typing.
 - **Rename the file**: the card is renamed.
-- **Change `list:`**, or drag a card in the Kanban note: the card moves.
+- **Change `list:`** (the list's name or a link to its note), or drag a card in the Kanban note: the card moves.
+- **Labels are tags** starting with `bh/` (spaces become `-`, so "High priority" is `#bh/High-priority`).
+  Add or remove them to change the card's labels. Your own tags, and any properties you add, are kept.
+- **Members are links**, so each person shows up in the graph next to their cards.
+- In the graph view, turn on **Tags** under Filters to see labels as nodes too.
 - **New note in a board folder**: a new card in the `list:` you give (or the first list).
 - **Delete a note**: the card is archived in BoardHydra, never deleted. Restore it from the board's archive.
 - **Changes in BoardHydra** show up live.
