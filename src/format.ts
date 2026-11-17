@@ -374,6 +374,61 @@ export function renderListNote(boardId: string, list: BHList, boardLink: string,
   return out.join('\n')
 }
 
+// ---------- checklist notes: card -> checklists -> items -> sub-items (a "dandelion" in the graph) ----------
+
+export interface GraphFile { path: string; text: string }
+
+const FOOTER = '_Kept up to date by the BoardHydra plugin. Edit checklists in the card’s note; edits here are replaced._'
+
+/**
+ * One note per checklist and one per item (sub-items too), under `dir` (the card's own folder).
+ * Each links up to its parent, so the graph draws the card with its checklists and items around it.
+ * Generated only; the card note stays the place to edit checklists.
+ */
+export function checklistNotes(c: BHCard, dir: string, cardLink: string, yaml: Yaml): GraphFile[] {
+  const out: GraphFile[] = []
+  const used = new Set<string>()
+  const pathIn = (folder: string, name: string) => {
+    const base = safeName(name)
+    let p = ''
+    for (let n = 1; !p || used.has(p.toLowerCase()); n++) p = `${folder}/${n === 1 ? base : `${base} (${n})`}.md`
+    used.add(p.toLowerCase())
+    return p
+  }
+  const link = (p: string, label: string) => wikiLink(p.replace(/\.md$/, ''), label)
+  const sorted = (items: BHCheckItem[] | undefined) => [...(items ?? [])].sort((a, b) => a.pos - b.pos)
+  const count = (items: BHCheckItem[]): [number, number] => items.reduce<[number, number]>(([d, t], it) => {
+    const [cd, ct] = count(it.children ?? [])
+    return [d + (it.state === 'complete' ? 1 : 0) + cd, t + 1 + ct]
+  }, [0, 0])
+
+  const items = (list: BHCheckItem[], folder: string, parentLink: string, parentKey: 'checklist' | 'parent', cl: BHChecklist): string[] => {
+    const lines: string[] = []
+    for (const it of sorted(list)) {
+      const p = pathIn(folder, it.name)
+      const done = it.state === 'complete'
+      lines.push(`- [${done ? 'x' : ' '}] ${link(p, it.name)}`)
+      const kids = it.children?.length ? items(it.children, p.replace(/\.md$/, ''), link(p, it.name), 'parent', cl) : []
+      const fm: Record<string, unknown> = { bh_board: c.idBoard, bh_card: c.id, bh_checklist: cl.id, bh_item: it.id, bh_kind: 'checkitem', [parentKey]: parentLink, done }
+      const body = [`- [${done ? 'x' : ' '}] ${it.name}`, '']
+      if (kids.length) body.push('## Sub-items', ...kids, '')
+      body.push(FOOTER, '')
+      out.push({ path: p, text: `---\n${yaml.stringify(fm).trimEnd()}\n---\n${body.join('\n')}` })
+    }
+    return lines
+  }
+
+  for (const cl of c.checklists ?? []) {
+    const p = pathIn(dir, cl.name)
+    const lines = items(cl.checkItems ?? [], p.replace(/\.md$/, ''), link(p, cl.name), 'checklist', cl)
+    const [d, t] = count(cl.checkItems ?? [])
+    const fm = { bh_board: c.idBoard, bh_card: c.id, bh_checklist: cl.id, bh_kind: 'checklist', card: cardLink, progress: `${d}/${t}`, done: t > 0 && d === t }
+    const body = [`# ${cl.name}`, '', `Card: ${cardLink}`, '', ...lines, '', FOOTER, '']
+    out.push({ path: p, text: `---\n${yaml.stringify(fm).trimEnd()}\n---\n${body.join('\n')}` })
+  }
+  return out
+}
+
 // ---------- board index note (Obsidian Kanban plugin format) ----------
 
 export function renderIndex(boardId: string, lists: BHList[], cards: BHCard[], pathOf: (c: BHCard) => string): string {

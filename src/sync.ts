@@ -1,6 +1,6 @@
 import { App, Notice, TAbstractFile, TFile, TFolder, normalizePath, parseYaml, stringifyYaml } from 'obsidian'
 import { Api, ApiError } from './api'
-import { BoardCtx, Yaml, linkTarget, noteFileName, noteToPatch, parseCardNote, parseIndex, parseNote, posBetween, renderBoardNote, renderCard, renderCardNote, renderIndex, renderListNote, safeName, unlink, wikiLink } from './format'
+import { BoardCtx, Yaml, checklistNotes, linkTarget, noteFileName, noteToPatch, parseCardNote, parseIndex, parseNote, posBetween, renderBoardNote, renderCard, renderCardNote, renderIndex, renderListNote, safeName, unlink, wikiLink } from './format'
 import type { BHCard, BHEvent, BHList, BHNote, BHSnapshot, CardPatch } from './types'
 
 export interface Settings {
@@ -13,6 +13,7 @@ export interface Settings {
   folders: Record<string, string> // board id → its folder name (kept when the board is renamed)
   clientId: string
   kanban: boolean // also write <board>/_Kanban.md (Kanban plugin format; it links to every card)
+  checklists: boolean // write <board>/Checklists/<card>/… : one note per checklist and item, for the graph
 }
 
 const yaml: Yaml = { parse: parseYaml, stringify: stringifyYaml }
@@ -22,6 +23,7 @@ const CONFLICTS = '_conflicts'
 const LISTS = 'Lists'
 const KANBAN = '_Kanban'
 const NOTES = 'Notes'
+const CHECKLISTS = 'Checklists'
 
 export function genId(): string {
   const b = new Uint8Array(12)
@@ -352,9 +354,43 @@ export class SyncEngine {
       }
     }
     for (const n of st.notes.values()) await this.applyRemoteNote(st, n) // keeps card links current after renames
+    await this.writeChecklists(st, cards)
     if (this.s().kanban) {
       await this.write(this.indexPath(st), renderIndex(st.id, st.snap.lists, cards, (c) => this.pathById.get(c.id)!.replace(/\.md$/, '')))
     }
+  }
+
+  /** Checklist and item notes for the graph; removes the ones whose checklist, item or card is gone. */
+  private async writeChecklists(st: BoardState, cards: BHCard[]) {
+    const root = normalizePath(`${st.folder}/${CHECKLISTS}`)
+    const keep = new Set<string>()
+    if (this.s().checklists) {
+      for (const c of cards) {
+        if (!c.checklists?.length) continue
+        const cardPath = this.pathById.get(c.id)!
+        const dir = `${root}/${cardPath.replace(/\.md$/, '').split('/').pop()}`
+        const files = checklistNotes(c, dir, this.cardLink(st, c.id), yaml)
+        for (const f of files) {
+          const p = normalizePath(f.path)
+          keep.add(p)
+          await this.ensureFolder(p.slice(0, p.lastIndexOf('/')))
+          await this.write(p, f.text)
+        }
+      }
+    }
+    const top = this.app.vault.getAbstractFileByPath(root)
+    if (top instanceof TFolder) await this.prune(top, keep)
+  }
+
+  /** Deletes generated checklist notes not in `keep`, then folders left empty. Your own files stay. */
+  private async prune(dir: TFolder, keep: Set<string>) {
+    for (const f of [...dir.children]) {
+      if (f instanceof TFolder) { await this.prune(f, keep); continue }
+      if (!(f instanceof TFile) || f.extension !== 'md' || keep.has(f.path)) continue
+      const kind = this.app.metadataCache.getFileCache(f)?.frontmatter?.bh_kind ?? parseNote(await this.app.vault.read(f), yaml).fm.bh_kind
+      if (kind === 'checklist' || kind === 'checkitem') await this.app.vault.delete(f)
+    }
+    if (!dir.children.length) await this.app.vault.delete(dir).catch(() => {})
   }
 
   private scheduleIndex(st: BoardState) {

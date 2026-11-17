@@ -13,6 +13,7 @@ const DEFAULTS: Settings = {
   folders: {},
   clientId: '',
   kanban: false,
+  checklists: true,
 }
 
 export default class BoardHydraPlugin extends Plugin {
@@ -188,6 +189,10 @@ class BoardHydraSettingTab extends PluginSettingTab {
       .setName('Kanban note')
       .setDesc('Also write a _Kanban note per board for the Kanban plugin, where dragging a card moves it. It links to every card, so the graph gets busier.')
       .addToggle((t) => t.setValue(s.kanban).onChange(async (on) => { s.kanban = on; await p.saveSettings(); await p.engine.restart() }))
+    new Setting(containerEl)
+      .setName('Checklist notes')
+      .setDesc('A small note for each checklist, item and sub-item, linked to its card, so checklists grow around their card in the graph. Edit checklists in the card note.')
+      .addToggle((t) => t.setValue(s.checklists).onChange(async (on) => { s.checklists = on; await p.saveSettings(); await p.engine.restart() }))
     new Setting(containerEl)
       .setName('Sync now')
       .setDesc(p.status.text || 'Reloads every chosen board (one request each).')

@@ -63,6 +63,10 @@ The description, in Markdown.
   linked to the card and to the person who wrote it. Edit or delete your own there and it syncs; other people's
   notes are read-only. To write one, open a card note and run **Add a note to this card**.
 - In the graph view, turn on **Tags** under Filters to see labels as nodes too.
+- **Checklists in the graph**: each checklist, item and sub-item gets a small note in `Checklists/<card>/`, linked
+  card → checklist → items → sub-items, so checklists sprout around their card in the graph. They're read-only (edit
+  checklists in the card note) and have `done: true` once ticked, so a graph group like `[done:true]` can color
+  finished items. Turn them off under **Checklist notes** in settings.
 - **New note in a board folder**: a new card in the `list:` you give (or the first list).
 - **Delete a note**: the card is archived in BoardHydra, never deleted. Restore it from the board's archive.
 - **Changes in BoardHydra** show up live.

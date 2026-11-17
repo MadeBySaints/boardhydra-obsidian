@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
 import { parse, stringify } from 'yaml'
-import { labelTag, noteToPatch, parseIndex, parseNote, posBetween, renderBoardNote, renderCard, renderIndex, renderListNote, safeName, unlink } from '../src/format'
+import { checklistNotes, labelTag, noteToPatch, parseIndex, parseNote, posBetween, renderBoardNote, renderCard, renderIndex, renderListNote, safeName, unlink } from '../src/format'
 import type { BHCard } from '../src/types'
 
 const yaml = { parse: (s: string) => parse(s), stringify: (o: any) => stringify(o) }
@@ -162,4 +162,35 @@ test('card notes: one file per note, linked to card and author', async () => {
   assert.match(noteFileName(n, 'Fix: login'), /^Sam Lee – Fix- login \(2026-11-1\d \d\d\.\d\d\)$/)
   assert.equal(linkTarget('[[BoardHydra/B/Fix- login|Fix: login]]'), 'BoardHydra/B/Fix- login')
   assert.equal(linkTarget([['BoardHydra/B/X']]), 'BoardHydra/B/X')
+})
+
+test('checklist notes: card -> checklist -> items -> sub-items', () => {
+  const files = checklistNotes(card, 'B/Checklists/Fix- login', '[[B/Fix- login|Fix: login]]', yaml)
+  const by = new Map(files.map((f) => [f.path, f.text]))
+  assert.deepEqual([...by.keys()].sort(), [
+    'B/Checklists/Fix- login/Steps.md',
+    'B/Checklists/Fix- login/Steps/one.md',
+    'B/Checklists/Fix- login/Steps/two.md',
+    'B/Checklists/Fix- login/Steps/two/sub.md',
+  ])
+  const cl = parse(by.get('B/Checklists/Fix- login/Steps.md')!.split('---')[1])
+  assert.equal(cl.bh_kind, 'checklist')
+  assert.equal(cl.card, '[[B/Fix- login|Fix: login]]')
+  assert.equal(cl.progress, '1/3')
+  assert.equal(cl.done, false)
+  assert.match(by.get('B/Checklists/Fix- login/Steps.md')!, /- \[x\] \[\[B\/Checklists\/Fix- login\/Steps\/one\|one\]\]/)
+  const sub = parse(by.get('B/Checklists/Fix- login/Steps/two/sub.md')!.split('---')[1])
+  assert.equal(sub.parent, '[[B/Checklists/Fix- login/Steps/two|two]]')
+  assert.equal(sub.bh_kind, 'checkitem')
+  assert.equal(parse(by.get('B/Checklists/Fix- login/Steps/one.md')!.split('---')[1]).done, true)
+  assert.match(by.get('B/Checklists/Fix- login/Steps/two.md')!, /## Sub-items\n- \[ \] \[\[B\/Checklists\/Fix- login\/Steps\/two\/sub\|sub\]\]/)
+})
+
+test('checklist notes: same names get their own files', () => {
+  const c: BHCard = { ...card, checklists: [
+    { id: 'a', idCard: 'c1', name: 'QA', checkItems: [{ id: 'x', name: 'Test', state: 'incomplete', pos: 1 }, { id: 'y', name: 'test', state: 'incomplete', pos: 2 }] },
+    { id: 'b', idCard: 'c1', name: 'QA', checkItems: [] },
+  ] }
+  const paths = checklistNotes(c, 'D', '[[x]]', yaml).map((f) => f.path).sort()
+  assert.deepEqual(paths, ['D/QA (2).md', 'D/QA.md', 'D/QA/Test.md', 'D/QA/test (2).md'])
 })
