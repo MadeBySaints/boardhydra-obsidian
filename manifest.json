@@ -1,0 +1,10 @@
+{
+  "id": "boardhydra",
+  "name": "BoardHydra",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Sync BoardHydra boards with your vault, both ways. Each card becomes a note.",
+  "author": "BoardHydra",
+  "authorUrl": "https://boardhydra.com",
+  "isDesktopOnly": false
+}

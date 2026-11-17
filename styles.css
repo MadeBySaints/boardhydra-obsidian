@@ -1,0 +1,2 @@
+.bh-status { color: var(--text-muted); font-size: var(--font-ui-small); }
+.bh-status.is-error { color: var(--text-error); }
