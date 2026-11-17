@@ -20,6 +20,8 @@ BoardHydra/
     Lists/
       To do.md           ← a list: links to its board and its cards
     Fix login.md         ← one note per card (links back to its list)
+    Notes/
+      Sam Lee – Fix login (2026-11-17 14.38).md   ← each note someone wrote on a card
     _Kanban.md           ← optional, for the Kanban plugin (Settings → Kanban note)
     _archive/            ← cards archived in BoardHydra
     _conflicts/          ← your version, when both sides changed a card at once
@@ -57,6 +59,9 @@ The description, in Markdown.
 - **Labels are tags** starting with `bh/` (spaces become `-`, so "High priority" is `#bh/High-priority`).
   Add or remove them to change the card's labels. Your own tags, and any properties you add, are kept.
 - **Members are links**, so each person shows up in the graph next to their cards.
+- **Notes on cards** (the Notes section at the bottom of a card in BoardHydra) each get their own note in `Notes/`,
+  linked to the card and to the person who wrote it. Edit or delete your own there and it syncs; other people's
+  notes are read-only. To write one, open a card note and run **Add a note to this card**.
 - In the graph view, turn on **Tags** under Filters to see labels as nodes too.
 - **New note in a board folder**: a new card in the `list:` you give (or the first list).
 - **Delete a note**: the card is archived in BoardHydra, never deleted. Restore it from the board's archive.

@@ -38,12 +38,25 @@ export interface BHCard {
   dateLastActivity: string
 }
 
+/** a note on a card, by one person */
+export interface BHNote {
+  id: string
+  idBoard: string
+  idCard: string
+  idMember: string
+  memberName: string
+  body: string
+  createdAt: string
+  updatedAt: string
+}
+
 export interface BHSnapshot {
   board: BHBoard
   lists: BHList[]
   cards: BHCard[]
   labels: BHLabel[]
   members: BHMember[]
+  notes?: BHNote[]
 }
 
 export interface BHEvent { type: string; op: 'upsert' | 'delete'; data: any; origin?: string }

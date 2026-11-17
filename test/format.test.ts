@@ -148,3 +148,18 @@ test('board and list notes link down the tree', () => {
   assert.match(l, /Board: \[\[BoardHydra\/B\|B\]\]/)
   assert.match(l, /- \[ \] \[\[BoardHydra\/B\/Fix- login\|Fix: login\]\]/)
 })
+
+test('card notes: one file per note, linked to card and author', async () => {
+  const { renderCardNote, parseCardNote, noteFileName, linkTarget } = await import('../src/format')
+  const n = { id: 'n1', idBoard: 'b', idCard: 'c1', idMember: 'u1', memberName: 'Sam Lee', body: 'Called the supplier.\nFriday works.', createdAt: '2026-11-17T14:38:00Z', updatedAt: '2026-11-17T14:38:00Z' }
+  const text = renderCardNote(n, '[[BoardHydra/B/Fix- login|Fix: login]]', '[[Sam Lee]]', yaml, { mood: 'good', card: 'old' })
+  const p = parseCardNote(text, yaml)
+  assert.equal(p.fm.bh_note, 'n1')
+  assert.equal(p.fm.card, '[[BoardHydra/B/Fix- login|Fix: login]]')
+  assert.equal(p.fm.author, '[[Sam Lee]]')
+  assert.equal(p.fm.mood, 'good') // the user's own property is kept; ours is replaced
+  assert.equal(p.body, 'Called the supplier.\nFriday works.')
+  assert.match(noteFileName(n, 'Fix: login'), /^Sam Lee – Fix- login \(2026-11-1\d \d\d\.\d\d\)$/)
+  assert.equal(linkTarget('[[BoardHydra/B/Fix- login|Fix: login]]'), 'BoardHydra/B/Fix- login')
+  assert.equal(linkTarget([['BoardHydra/B/X']]), 'BoardHydra/B/X')
+})

@@ -22,7 +22,7 @@
 //   ## Links
 //   - [title](https://…)
 
-import type { BHCard, BHCheckItem, BHChecklist, BHLabel, BHLink, BHList, BHMember, CardPatch } from './types'
+import type { BHCard, BHCheckItem, BHChecklist, BHLabel, BHLink, BHList, BHMember, BHNote, CardPatch } from './types'
 
 export interface Yaml {
   parse(s: string): any
@@ -322,6 +322,39 @@ export function noteToPatch(parsed: ParsedNote, basename: string, card: BHCard |
   if (!card ? links.length > 0 : !eq(norm(links), norm(oldLinks))) p.links = links
 
   return { patch: p, warnings }
+}
+
+// ---------- notes on cards: one Obsidian note per BoardHydra note ----------
+
+const NOTE_KEYS = new Set(['bh_note', 'bh_board', 'bh_card', 'bh_updated', 'card', 'author', 'created'])
+
+/** File name for a card's note: "<author> – <card> (2026-11-17 14.38)". */
+export function noteFileName(n: BHNote, cardName: string): string {
+  const d = new Date(n.createdAt)
+  const pad = (x: number) => String(x).padStart(2, '0')
+  const stamp = Number.isNaN(d.getTime()) ? n.createdAt.slice(0, 10) : `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}.${pad(d.getMinutes())}`
+  return safeName(`${n.memberName || 'Someone'} – ${cardName} (${stamp})`)
+}
+
+/** A card's note: links to its card and its author, so the graph reads card → notes and person → notes. */
+export function renderCardNote(n: BHNote, cardLink: string, authorLink: string, yaml: Yaml, existing: Record<string, any> = {}): string {
+  const fm: Record<string, unknown> = { bh_note: n.id, bh_board: n.idBoard, bh_card: n.idCard, bh_updated: n.updatedAt, card: cardLink, author: authorLink, created: n.createdAt }
+  for (const [k, v] of Object.entries(existing)) if (!NOTE_KEYS.has(k)) fm[k] = v
+  return `---\n${yaml.stringify(fm).trimEnd()}\n---\n${n.body.trim()}\n`
+}
+
+export function parseCardNote(text: string, yaml: Yaml): { fm: Record<string, any>; body: string } {
+  const { fm, body } = splitFrontmatter(text)
+  let meta: Record<string, any> = {}
+  try { const v = fm === null ? null : yaml.parse(fm); if (v && typeof v === 'object') meta = v } catch { meta = {} }
+  return { fm: meta, body: body.trim() }
+}
+
+/** The link target of a frontmatter link (YAML may read an unquoted [[link]] as a nested list). */
+export function linkTarget(v: unknown): string {
+  const raw = Array.isArray(v) ? `[[${String((v as unknown[]).flat(2)[0] ?? '')}]]` : typeof v === 'string' ? v : ''
+  const m = /^\s*\[\[([^\]|]+)(?:\|[^\]]*)?\]\]\s*$/.exec(raw)
+  return m ? m[1].trim() : raw.trim()
 }
 
 // ---------- graph notes: board -> lists -> cards ----------

@@ -38,6 +38,20 @@ export default class BoardHydraPlugin extends Plugin {
     })
     this.addCommand({ id: 'sync-now', name: 'Sync now', callback: () => this.syncNow() })
     this.addCommand({ id: 'connect', name: 'Connect to BoardHydra', callback: () => this.openConnect() })
+    this.addCommand({
+      id: 'add-card-note',
+      name: 'Add a note to this card',
+      checkCallback: (checking) => {
+        const f = this.app.workspace.getActiveFile()
+        if (!f || !this.settings.key) return false
+        if (checking) return true
+        this.engine.newNoteFor(f.path).then((p) => {
+          if (!p) return new Notice('BoardHydra: open a card note first.')
+          this.app.workspace.openLinkText(p, '', true)
+        })
+        return true
+      },
+    })
 
     this.app.workspace.onLayoutReady(async () => {
       // watch the vault only after it has loaded, so start-up doesn't look like a flood of edits

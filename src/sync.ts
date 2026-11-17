@@ -1,7 +1,7 @@
 import { App, Notice, TAbstractFile, TFile, TFolder, normalizePath, parseYaml, stringifyYaml } from 'obsidian'
 import { Api, ApiError } from './api'
-import { BoardCtx, Yaml, noteToPatch, parseIndex, parseNote, posBetween, renderBoardNote, renderCard, renderIndex, renderListNote, safeName, wikiLink } from './format'
-import type { BHCard, BHEvent, BHList, BHSnapshot, CardPatch } from './types'
+import { BoardCtx, Yaml, linkTarget, noteFileName, noteToPatch, parseCardNote, parseIndex, parseNote, posBetween, renderBoardNote, renderCard, renderCardNote, renderIndex, renderListNote, safeName, unlink, wikiLink } from './format'
+import type { BHCard, BHEvent, BHList, BHNote, BHSnapshot, CardPatch } from './types'
 
 export interface Settings {
   server: string
@@ -21,6 +21,7 @@ const ARCHIVE = '_archive'
 const CONFLICTS = '_conflicts'
 const LISTS = 'Lists'
 const KANBAN = '_Kanban'
+const NOTES = 'Notes'
 
 export function genId(): string {
   const b = new Uint8Array(12)
@@ -32,6 +33,7 @@ interface BoardState {
   id: string
   snap: BHSnapshot
   cards: Map<string, BHCard>
+  notes: Map<string, BHNote>
   folder: string // full vault path of the board's folder
   abort?: AbortController
   poll?: number
@@ -49,6 +51,10 @@ export class SyncEngine {
   private pending = new Set<string>() // card ids with local edits waiting to go up
   private creating = new Set<string>() // paths of new notes being created on the server
   private indexTimers = new Map<string, number>()
+  private notePaths = new Map<string, string>() // BoardHydra note id → vault path
+  private pendingNotes = new Set<string>() // note ids with local edits waiting to go up
+  private selfDeletes = new Set<string>() // paths we just removed
+  private me: { id: string; name: string } | null = null
   private stopped = false
   paused = ''
 
@@ -64,6 +70,9 @@ export class SyncEngine {
     if (!this.s().key) return this.onStatus({ text: 'BoardHydra: not connected' })
     if (!this.s().boards.length) return this.onStatus({ text: 'BoardHydra: no boards chosen' })
     this.onStatus({ text: 'BoardHydra: syncing…' })
+    if (!this.me) {
+      try { const m = await this.api.me(); this.me = { id: m.id, name: m.name } } catch (e) { if (this.handleFatal(e)) return }
+    }
     for (const id of this.s().boards) {
       try {
         await this.syncBoard(id)
@@ -161,7 +170,7 @@ export class SyncEngine {
   async syncBoard(id: string) {
     const snap = await this.api.snapshot(id)
     const prev = this.boards.get(id)
-    const st: BoardState = { id, snap, cards: new Map(snap.cards.map((c) => [c.id, c])), folder: this.boardFolder(snap), live: prev?.live ?? false, abort: prev?.abort, poll: prev?.poll }
+    const st: BoardState = { id, snap, cards: new Map(snap.cards.map((c) => [c.id, c])), notes: new Map((snap.notes ?? []).map((n) => [n.id, n])), folder: this.boardFolder(snap), live: prev?.live ?? false, abort: prev?.abort, poll: prev?.poll }
     this.boards.set(id, st)
     await this.ensureFolder(st.folder)
     // what's already in the vault
@@ -177,7 +186,18 @@ export class SyncEngine {
     for (const [cid, path] of local) this.pathById.set(cid, path)
     for (const c of snap.cards) await this.applyRemote(st, c)
     for (const [cid, path] of local) if (!st.cards.has(cid)) await this.archiveLocal(cid, path)
-    await this.writeIndex(st)
+    // notes on cards
+    const nd = this.app.vault.getAbstractFileByPath(this.notesDir(st))
+    if (nd instanceof TFolder) {
+      for (const f of [...nd.children]) {
+        if (!(f instanceof TFile) || f.extension !== 'md') continue
+        const fm = parseCardNote(await this.app.vault.read(f), yaml).fm
+        if (typeof fm.bh_note !== 'string') continue
+        this.notePaths.set(fm.bh_note, f.path)
+        if (!st.notes.has(fm.bh_note)) await this.removeLocalNote(fm.bh_note) // deleted in BoardHydra
+      }
+    }
+    await this.writeIndex(st) // also writes the card notes
     this.refreshStatus()
   }
 
@@ -253,6 +273,62 @@ export class SyncEngine {
     return normalizePath(`${st.folder}/${KANBAN}.md`)
   }
 
+  private notesDir(st: BoardState) {
+    return normalizePath(`${st.folder}/${NOTES}`)
+  }
+
+  private cardLink(st: BoardState, cardId: string): string {
+    const c = st.cards.get(cardId)
+    const p = this.pathById.get(cardId)
+    return p ? wikiLink(p.replace(/\.md$/, ''), c?.name ?? '') : c?.name ?? ''
+  }
+
+  private async applyRemoteNote(st: BoardState, n: BHNote) {
+    st.notes.set(n.id, n)
+    if (this.pendingNotes.has(n.id)) return
+    const name = n.memberName || 'Someone'
+    let path = this.notePaths.get(n.id)
+    if (!path || !this.app.vault.getAbstractFileByPath(path)) {
+      await this.ensureFolder(this.notesDir(st))
+      const base = noteFileName(n, st.cards.get(n.idCard)?.name ?? 'card')
+      path = normalizePath(`${this.notesDir(st)}/${base}.md`)
+      for (let k = 2; this.app.vault.getAbstractFileByPath(path) && ![...this.notePaths.entries()].some(([id, p]) => id === n.id && p === path); k++) {
+        path = normalizePath(`${this.notesDir(st)}/${base} (${k}).md`)
+      }
+    }
+    this.notePaths.set(n.id, path)
+    const f = this.app.vault.getAbstractFileByPath(path)
+    const existing = f instanceof TFile ? parseCardNote(await this.app.vault.read(f), yaml).fm : {}
+    await this.write(path, renderCardNote(n, this.cardLink(st, n.idCard), wikiLink(safeName(name), name), yaml, existing))
+  }
+
+  private async removeLocalNote(id: string) {
+    const p = this.notePaths.get(id)
+    this.notePaths.delete(id)
+    for (const st of this.boards.values()) st.notes.delete(id)
+    const f = p ? this.app.vault.getAbstractFileByPath(p) : null
+    if (f instanceof TFile) {
+      this.selfDeletes.add(f.path)
+      await this.app.fileManager.trashFile(f)
+    }
+  }
+
+  /** Starts a new note on the card shown in `cardPath`; returns the new file's path. */
+  async newNoteFor(cardPath: string): Promise<string | null> {
+    const st = this.boardForPath(cardPath)
+    const id = this.idForPath(cardPath)
+    const card = id ? st?.cards.get(id) : undefined
+    if (!st || !card) return null
+    await this.ensureFolder(this.notesDir(st))
+    const base = safeName(`${this.me?.name || 'Me'} – ${card.name} (new)`)
+    let path = normalizePath(`${this.notesDir(st)}/${base}.md`)
+    for (let k = 2; this.app.vault.getAbstractFileByPath(path); k++) path = normalizePath(`${this.notesDir(st)}/${base} (${k}).md`)
+    const text = `---\n${yaml.stringify({ bh_card: card.id, card: this.cardLink(st, card.id) }).trimEnd()}\n---\n`
+    this.selfWrites.set(path, text)
+    await this.app.vault.create(path, text)
+    return path
+  }
+
   /** Board note → list notes → cards (cards link back through `list:`), plus the Kanban note if turned on. */
   private async writeIndex(st: BoardState) {
     const cards = [...st.cards.values()].filter((c) => !c.closed && this.pathById.has(c.id)).sort((a, b) => a.pos - b.pos)
@@ -275,6 +351,7 @@ export class SyncEngine {
         if (parseNote(await this.app.vault.read(f), yaml).fm.bh_kind === 'list') await this.app.fileManager.trashFile(f)
       }
     }
+    for (const n of st.notes.values()) await this.applyRemoteNote(st, n) // keeps card links current after renames
     if (this.s().kanban) {
       await this.write(this.indexPath(st), renderIndex(st.id, st.snap.lists, cards, (c) => this.pathById.get(c.id)!.replace(/\.md$/, '')))
     }
@@ -353,6 +430,10 @@ export class SyncEngine {
         }
         this.scheduleIndex(st)
         break
+      case 'note':
+        if (ev.op === 'delete') await this.removeLocalNote(ev.data.id)
+        else await this.applyRemoteNote(st, ev.data as BHNote)
+        break
       case 'list':
         st.snap.lists = st.snap.lists.filter((l) => l.id !== ev.data.id)
         if (ev.op === 'upsert') st.snap.lists.push(ev.data)
@@ -377,6 +458,19 @@ export class SyncEngine {
     for (const st of this.boards.values()) {
       if (path.startsWith(st.folder + '/') && !path.slice(st.folder.length + 1).includes('/')) return st
     }
+    return undefined
+  }
+
+  private boardForNotePath(path: string): BoardState | undefined {
+    for (const st of this.boards.values()) {
+      const dir = this.notesDir(st)
+      if (path.startsWith(dir + '/') && !path.slice(dir.length + 1).includes('/')) return st
+    }
+    return undefined
+  }
+
+  private noteIdForPath(path: string): string | undefined {
+    for (const [id, p] of this.notePaths) if (p === path) return id
     return undefined
   }
 
@@ -407,20 +501,24 @@ export class SyncEngine {
 
   private schedule(path: string) {
     const idx = this.boardForIndex(path)
-    const st = idx ? undefined : this.boardForPath(path)
-    if (!st && !idx) return
-    const id = this.idForPath(path)
+    const noteSt = idx ? undefined : this.boardForNotePath(path)
+    const st = idx || noteSt ? undefined : this.boardForPath(path)
+    if (!st && !idx && !noteSt) return
+    const id = st ? this.idForPath(path) : undefined
     if (id) this.pending.add(id)
+    const noteId = noteSt ? this.noteIdForPath(path) : undefined
+    if (noteId) this.pendingNotes.add(noteId)
     const t = this.timers.get(path)
     if (t) window.clearTimeout(t)
     this.timers.set(path, window.setTimeout(() => {
       this.timers.delete(path)
-      const run = idx ? this.pushIndex(idx) : this.push(path)
+      const run = idx ? this.pushIndex(idx) : noteSt ? this.pushNote(noteSt, path) : this.push(path)
       run.catch((e) => {
         if (this.handleFatal(e)) return
         new Notice('BoardHydra: ' + (e as Error).message)
       }).finally(() => {
         if (id) this.pending.delete(id)
+        if (noteId) this.pendingNotes.delete(noteId)
       })
     }, PUSH_DELAY))
   }
@@ -531,9 +629,54 @@ export class SyncEngine {
     this.scheduleIndex(st)
   }
 
+  /** A note in <board>/Notes changed: send its text up (your own notes), or start a new one on its card. */
+  private async pushNote(st: BoardState, path: string) {
+    const f = this.app.vault.getAbstractFileByPath(path)
+    if (!(f instanceof TFile)) return
+    const { fm, body } = parseCardNote(await this.app.vault.read(f), yaml)
+    const id = typeof fm.bh_note === 'string' ? fm.bh_note : ''
+    if (id) {
+      const n = st.notes.get(id)
+      if (!n || body === n.body.trim()) return
+      if (!body) return // emptied: delete the file to delete the note
+      if (n.idMember !== this.me?.id) {
+        this.pendingNotes.delete(id)
+        await this.applyRemoteNote(st, n)
+        new Notice(`BoardHydra: only ${n.memberName || 'its author'} can edit that note. Your change was undone.`, 8000)
+        return
+      }
+      const updated = await this.api.updateNote(id, body)
+      this.pendingNotes.delete(id)
+      await this.applyRemoteNote(st, updated)
+      return
+    }
+    if (!body || this.creating.has(path)) return
+    // which card: bh_card, else the card link, else a card with that name
+    let cardId = typeof fm.bh_card === 'string' && st.cards.has(fm.bh_card) ? fm.bh_card : ''
+    if (!cardId) {
+      const target = linkTarget(fm.card)
+      cardId = [...this.pathById.entries()].find(([cid, p]) => st.cards.has(cid) && (p.replace(/\.md$/, '') === target || p.replace(/\.md$/, '').endsWith('/' + target)))?.[0] ?? ''
+      if (!cardId && target) cardId = [...st.cards.values()].find((c) => c.name === unlink(String(fm.card)))?.id ?? ''
+    }
+    if (!cardId) {
+      new Notice('BoardHydra: to share this note, add a card: property linking to the card (or use “Add a note to this card”).', 8000)
+      return
+    }
+    this.creating.add(path)
+    try {
+      const created = await this.api.createNote(cardId, body)
+      this.notePaths.set(created.id, path)
+      await this.applyRemoteNote(st, created)
+    } finally {
+      this.creating.delete(path)
+    }
+  }
+
   onLocalRename(f: TAbstractFile, oldPath: string) {
     if (!(f instanceof TFile)) return
     if (this.selfMoves.delete(f.path)) return
+    const nid = this.noteIdForPath(oldPath)
+    if (nid) { this.notePaths.set(nid, f.path); return }
     const id = this.idForPath(oldPath)
     if (id) this.pathById.set(id, f.path)
     if (this.boardForPath(f.path)) this.schedule(f.path)
@@ -542,6 +685,19 @@ export class SyncEngine {
 
   onLocalDelete(f: TAbstractFile) {
     if (!(f instanceof TFile)) return
+    if (this.selfDeletes.delete(f.path)) return
+    const nid = this.noteIdForPath(f.path)
+    if (nid) {
+      this.notePaths.delete(nid)
+      if (this.stopped || this.paused) return
+      this.api.deleteNote(nid).then(() => {
+        for (const st of this.boards.values()) st.notes.delete(nid)
+      }).catch((e) => {
+        if (this.handleFatal(e)) return
+        new Notice('BoardHydra: ' + (e as Error).message + ' It will come back at the next sync.', 8000)
+      })
+      return
+    }
     const id = this.idForPath(f.path)
     if (!id) return
     this.pathById.delete(id)
