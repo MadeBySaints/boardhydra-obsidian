@@ -194,3 +194,27 @@ test('checklist notes: same names get their own files', () => {
   const paths = checklistNotes(c, 'D', '[[x]]', yaml).map((f) => f.path).sort()
   assert.deepEqual(paths, ['D/QA (2).md', 'D/QA.md', 'D/QA/Test.md', 'D/QA/test (2).md'])
 })
+
+// ---------- graph colors ----------
+import { labelColorGroups, mergeColorGroups } from '../src/graph'
+
+test('graph groups: one per colored label, board order, first board wins a name', () => {
+  const g = labelColorGroups([
+    { id: '1', idBoard: 'b', name: 'High priority', color: 'lime', pos: 1, hex: '#a8e05b' },
+    { id: '2', idBoard: 'b', name: 'Bug', color: 'red', pos: 2 }, // no hex: free color fallback
+    { id: '3', idBoard: 'b', name: 'Plain', color: null, pos: 3 },
+    { id: '4', idBoard: 'c', name: 'bug', color: 'blue', pos: 1, hex: '#3f9bff' },
+  ])
+  assert.deepEqual(g, [
+    { query: 'tag:#bh/High-priority', color: { a: 1, rgb: 0xa8e05b } },
+    { query: 'tag:#bh/Bug', color: { a: 1, rgb: 0xff5d6c } },
+  ])
+})
+
+test('graph groups: yours are kept first, ours replaced', () => {
+  const mine = { query: 'path:Daily', color: { a: 1, rgb: 1 } }
+  const old = { query: 'tag:#bh/Gone', color: { a: 1, rgb: 2 } }
+  const ours = [{ query: 'tag:#bh/Bug', color: { a: 1, rgb: 3 } }]
+  assert.deepEqual(mergeColorGroups([old, mine, 'junk'], ours), [mine, ...ours])
+  assert.deepEqual(mergeColorGroups(undefined, []), [])
+})

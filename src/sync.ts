@@ -1,7 +1,18 @@
 import { App, Notice, TAbstractFile, TFile, TFolder, normalizePath, parseYaml, stringifyYaml } from 'obsidian'
 import { Api, ApiError } from './api'
 import { BoardCtx, Yaml, checklistNotes, linkTarget, noteFileName, noteToPatch, parseCardNote, parseIndex, parseNote, posBetween, renderBoardNote, renderCard, renderCardNote, renderIndex, renderListNote, safeName, unlink, wikiLink } from './format'
+import { ColorGroup, labelColorGroups, mergeColorGroups, sameGroups } from './graph'
 import type { BHCard, BHEvent, BHLabel, BHList, BHNote, BHSnapshot, CardPatch } from './types'
+
+// Obsidian's core graph plugin isn't in the public API; only these parts are used, and each is checked first.
+interface GraphPluginLike { options: { colorGroups?: unknown }; saveOptions(): void }
+interface GraphViewLike { dataEngine?: { setOptions?(o: { colorGroups: ColorGroup[] }): void } }
+
+function graphPlugin(app: App): GraphPluginLike | null {
+  const ip = (app as unknown as { internalPlugins?: { getPluginById?(id: string): { instance?: unknown } | null } }).internalPlugins
+  const inst = ip?.getPluginById?.('graph')?.instance as Partial<GraphPluginLike> | undefined
+  return inst && typeof inst.options === 'object' && inst.options && typeof inst.saveOptions === 'function' ? (inst as GraphPluginLike) : null
+}
 
 export interface Settings {
   server: string
@@ -14,6 +25,7 @@ export interface Settings {
   clientId: string
   kanban: boolean // also write <board>/_Kanban.md (Kanban plugin format; it links to every card)
   checklists: boolean // write <board>/Checklists/<card>/… : one note per checklist and item, for the graph
+  graphColors: boolean // keep a graph color group per label, in the label's BoardHydra color
 }
 
 const yaml: Yaml = { parse: parseYaml, stringify: stringifyYaml }
@@ -56,6 +68,8 @@ export class SyncEngine {
   private notePaths = new Map<string, string>() // BoardHydra note id → vault path
   private pendingNotes = new Set<string>() // note ids with local edits waiting to go up
   private selfDeletes = new Set<string>() // paths we just removed
+  private queues = new Map<string, Promise<void>>() // board id → its events, applied one at a time
+  private graphTimer = 0
   private me: { id: string; name: string } | null = null
   private stopped = false
   paused = ''
@@ -87,6 +101,45 @@ export class SyncEngine {
     this.refreshStatus()
   }
 
+  /** Runs board work in order: two events for one card must not both pick a file for it. */
+  private enqueue(boardId: string, job: () => Promise<void>): Promise<void> {
+    const next = (this.queues.get(boardId) ?? Promise.resolve()).then(job, job)
+    const settled = next.catch(() => {})
+    this.queues.set(boardId, settled)
+    void settled.then(() => { if (this.queues.get(boardId) === settled) this.queues.delete(boardId) })
+    return next
+  }
+
+  // ---------- graph colors ----------
+
+  scheduleGraph() {
+    window.clearTimeout(this.graphTimer)
+    this.graphTimer = window.setTimeout(() => { this.applyGraphColors().catch(() => {}) }, 500)
+  }
+
+  /** One graph color group per label (tag:#bh/<label>), in the label's color. Your own groups are kept, ahead of ours. */
+  async applyGraphColors() {
+    const labels = this.s().graphColors ? [...this.boards.values()].flatMap((st) => [...st.snap.labels].sort((a, b) => a.pos - b.pos)) : []
+    if (this.s().graphColors && !this.boards.size) return // not synced yet: don't clear groups we wrote last time
+    const ours = labelColorGroups(labels)
+    const graph = graphPlugin(this.app)
+    if (graph) {
+      const next = mergeColorGroups(graph.options.colorGroups, ours)
+      if (sameGroups(graph.options.colorGroups, next)) return
+      graph.options.colorGroups = next
+      graph.saveOptions()
+      for (const leaf of this.app.workspace.getLeavesOfType('graph')) (leaf.view as unknown as GraphViewLike).dataEngine?.setOptions?.({ colorGroups: next })
+      return
+    }
+    // graph plugin not loaded: edit its settings file, so the colors are there when it is
+    const path = normalizePath(`${this.app.vault.configDir}/graph.json`)
+    let cur: Record<string, unknown> = {}
+    try { cur = JSON.parse(await this.app.vault.adapter.read(path)) as Record<string, unknown> } catch { /* no file yet */ }
+    const next = mergeColorGroups(cur.colorGroups, ours)
+    if (sameGroups(cur.colorGroups, next)) return
+    await this.app.vault.adapter.write(path, JSON.stringify({ ...cur, colorGroups: next }, null, 2))
+  }
+
   stop() {
     this.stopped = true
     for (const st of this.boards.values()) {
@@ -95,6 +148,7 @@ export class SyncEngine {
     }
     for (const t of this.timers.values()) window.clearTimeout(t)
     for (const t of this.indexTimers.values()) window.clearTimeout(t)
+    window.clearTimeout(this.graphTimer)
     this.boards.clear()
     this.timers.clear()
     this.indexTimers.clear()
@@ -177,14 +231,16 @@ export class SyncEngine {
     await this.ensureFolder(st.folder)
     // what's already in the vault
     const folder = this.app.vault.getAbstractFileByPath(st.folder)
-    const local = new Map<string, string>()
+    const found = new Map<string, TFile[]>()
     if (folder instanceof TFolder) {
       for (const f of folder.children) {
         if (!(f instanceof TFile) || f.extension !== 'md') continue
         const fm = parseNote(await this.app.vault.read(f), yaml).fm
-        if (typeof fm.bh_id === 'string') local.set(fm.bh_id, f.path)
+        if (typeof fm.bh_id === 'string') found.set(fm.bh_id, [...(found.get(fm.bh_id) ?? []), f])
       }
     }
+    const local = new Map<string, string>()
+    for (const [cid, files] of found) local.set(cid, await this.keepOne(st, cid, files))
     for (const [cid, path] of local) this.pathById.set(cid, path)
     for (const c of snap.cards) await this.applyRemote(st, c)
     for (const [cid, path] of local) if (!st.cards.has(cid)) await this.archiveLocal(cid, path)
@@ -201,6 +257,36 @@ export class SyncEngine {
     }
     await this.writeIndex(st) // also writes the card notes
     this.refreshStatus()
+    this.scheduleGraph()
+  }
+
+  /**
+   * Two notes for one card (an older plugin could leave the old one behind): keep the one at the card's own
+   * name, else the newest, and move the others to the trash (Obsidian's or the system's, so nothing is lost).
+   */
+  private async keepOne(st: BoardState, cardId: string, files: TFile[]): Promise<string> {
+    if (files.length === 1) return files[0].path
+    const name = st.cards.get(cardId)?.name
+    const own = name ? files.find((f) => f.path === normalizePath(`${st.folder}/${safeName(name)}.md`)) : undefined
+    const keep = own ?? [...files].sort((a, b) => b.stat.mtime - a.stat.mtime)[0]
+    for (const f of files) {
+      if (f === keep) continue
+      this.selfDeletes.add(f.path)
+      await this.app.fileManager.trashFile(f)
+    }
+    return keep.path
+  }
+
+  /** the card's id written in a note's properties, from Obsidian's cache */
+  private noteCardId(f: TAbstractFile | null): unknown {
+    return f instanceof TFile ? this.app.metadataCache.getFileCache(f)?.frontmatter?.bh_id : undefined
+  }
+
+  /** a note in the board's folder that already carries this card's id */
+  private findLocal(st: BoardState, cardId: string): string | undefined {
+    const dir = this.app.vault.getAbstractFileByPath(st.folder)
+    if (!(dir instanceof TFolder)) return undefined
+    return dir.children.find((f) => f instanceof TFile && f.extension === 'md' && this.noteCardId(f) === cardId)?.path
   }
 
   private uniquePath(st: BoardState, name: string, cardId: string): string {
@@ -210,6 +296,7 @@ export class SyncEngine {
       const owner = [...this.pathById.entries()].find(([, v]) => v === p)?.[0]
       const f = this.app.vault.getAbstractFileByPath(p)
       if ((!f && !owner) || owner === cardId) return p
+      if (!owner && this.noteCardId(f) === cardId) return p // this card's own note, just not tracked yet
     }
   }
 
@@ -242,6 +329,7 @@ export class SyncEngine {
     }
     if (this.pending.has(c.id)) return // a local edit is on its way up; it carries ifUpdatedAt and settles conflicts
     let path = this.pathById.get(c.id)
+    if (!path || !this.app.vault.getAbstractFileByPath(path)) path = this.findLocal(st, c.id) ?? path // never start a second note for a card
     const want = this.uniquePath(st, c.name, c.id)
     if (path && this.app.vault.getAbstractFileByPath(path) && path !== want && !path.endsWith(`/${safeName(c.name)}.md`)) {
       await this.move(path, want) // renamed in BoardHydra
@@ -263,6 +351,14 @@ export class SyncEngine {
     let to = normalizePath(`${dir}/${f.name}`)
     for (let n = 2; this.app.vault.getAbstractFileByPath(to); n++) to = normalizePath(`${dir}/${f.basename} (${n}).md`)
     await this.move(path, to)
+    // an archived card is on no list: drop the link, so the graph stops drawing it on its old list
+    const moved = this.app.vault.getAbstractFileByPath(to)
+    if (moved instanceof TFile) {
+      await this.app.fileManager.processFrontMatter(moved, (fm: Record<string, unknown>) => {
+        delete fm.list
+        fm.archived = true
+      }).catch(() => {})
+    }
   }
 
   /** the board's own note: BoardHydra/<board>.md, linking to its lists */
@@ -423,7 +519,7 @@ export class SyncEngine {
             const cur = this.boards.get(id)
             if (cur) cur.live = true
             this.refreshStatus()
-          }, (ev) => { this.onEvent(id, ev).catch(() => {}) })
+          }, (ev) => { this.enqueue(id, () => this.onEvent(id, ev)).catch(() => {}) })
         } catch (e) {
           if (ac.signal.aborted) return
           if (this.handleFatal(e)) return
@@ -439,7 +535,7 @@ export class SyncEngine {
         delay = Math.min(delay * 2, 60000)
         if (ac.signal.aborted || this.stopped) return
         // events missed while disconnected aren't replayed: reload the board once
-        try { await this.syncBoard(id) } catch (e) { if (this.handleFatal(e)) return }
+        try { await this.enqueue(id, () => this.syncBoard(id)) } catch (e) { if (this.handleFatal(e)) return }
       }
     }
     void run()
@@ -479,6 +575,7 @@ export class SyncEngine {
         st.snap.labels = st.snap.labels.filter((l) => l.id !== ev.data.id)
         if (ev.op === 'upsert') st.snap.labels.push(ev.data as BHLabel)
         await this.rerender(st)
+        this.scheduleGraph()
         break
       case 'members':
       case 'board':

@@ -15,6 +15,7 @@ const DEFAULTS: Settings = {
   clientId: '',
   kanban: false,
   checklists: true,
+  graphColors: true,
 }
 
 export default class BoardHydraPlugin extends Plugin {
@@ -149,10 +150,11 @@ class BoardHydraSettingTab extends PluginSettingTab {
     const s = p.settings
     if (key === 'root') s.root = String(value).trim() || DEFAULTS.root
     else if (key === 'server') s.server = String(value).trim() || DEFAULTS.server
-    else if (key === 'kanban' || key === 'checklists') s[key] = value === true
+    else if (key === 'kanban' || key === 'checklists' || key === 'graphColors') s[key] = value === true
     else return
     await p.saveSettings()
     if (key === 'kanban' || key === 'checklists') await p.engine.restart()
+    if (key === 'graphColors') await p.engine.applyGraphColors()
   }
 
   /** Loads the board list, then redraws the tab. Started by the "Loading" row, so it never runs at start-up. */
@@ -253,6 +255,12 @@ class BoardHydraSettingTab extends PluginSettingTab {
             name: 'Checklist notes',
             desc: 'A small note for each checklist, item and sub-item, linked to its card, so checklists grow around their card in the graph. Edit checklists in the card note.',
             control: { type: 'toggle', key: 'checklists', defaultValue: DEFAULTS.checklists },
+          },
+          {
+            name: 'Color the graph by label',
+            desc: 'Adds a graph color group for each label (tag:#bh/…) in its BoardHydra color, kept up to date. Your own groups stay and come first. A card with several labels takes the color of its first one in board order.',
+            aliases: ['graph', 'colors', 'labels'],
+            control: { type: 'toggle', key: 'graphColors', defaultValue: DEFAULTS.graphColors },
           },
           {
             name: 'Sync now',

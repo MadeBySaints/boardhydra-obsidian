@@ -4,7 +4,7 @@ export interface BHBoard { id: string; name: string; desc?: string; role?: strin
 
 export interface BHList { id: string; idBoard: string; name: string; pos: number; closed: boolean }
 
-export interface BHLabel { id: string; idBoard: string; name: string; color: string | null; pos: number }
+export interface BHLabel { id: string; idBoard: string; name: string; color: string | null; pos: number; hex?: string }
 
 export interface BHMember { id: string; fullName: string; username: string }
 
