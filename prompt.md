@@ -1,8 +1,29 @@
 # Tidy up a board with AI
 
-This page is a ready-made prompt that turns a messy board into a clean Obsidian graph. When it's done, the graph looks like this:
+This page is a ready-made prompt that turns a messy board into a clean Obsidian graph. Here's a large demo board,
+before and after:
 
-![A large board in the graph view: the board in purple at the center, lists in blue, cards in their label colors, checklists in amber, and checklist items in red (open) or green (done)](images/tidy-graph.png)
+| Before | After |
+| --- | --- |
+| ![Before: a messy board in the Obsidian graph, a grey tangle of unlabeled cards with long sentence names](images/tidy-before-graph.png) | ![After: the same board in the graph, cards in their label colors, checklists in amber, and checklist items in red (open) or green (done)](images/tidy-after-graph.png) |
+| 194 cards in junk lists, no labels: a grey tangle. | 114 cards in label colors, each with its checklists. |
+| ![Before: the board in BoardHydra, with lists like TODO and doing??, long sentence names and no labels](images/tidy-before-board.png) | ![After: the board in BoardHydra, with clear lists, short names, labels and checklist counts](images/tidy-after-board.png) |
+| Sentence names, stray one-liners. | Ideas → Bugs → Polish → Features → Launch → Up Next → In Progress → Done. |
+
+<details>
+<summary>The same board in the other BoardHydra views</summary>
+
+| Before | After |
+| --- | --- |
+| ![Table view before](images/tidy-before-table.png) | ![Table view after](images/tidy-after-table.png) |
+| ![Calendar view before](images/tidy-before-calendar.png) | ![Calendar view after](images/tidy-after-calendar.png) |
+| ![Timeline view before](images/tidy-before-timeline.png) | ![Timeline view after](images/tidy-after-timeline.png) |
+| ![Dashboard view before](images/tidy-before-dashboard.png) | ![Dashboard view after](images/tidy-after-dashboard.png) |
+| ![Map view before](images/tidy-before-map.png) | ![Map view after](images/tidy-after-map.png) |
+
+</details>
+
+After the tidy-up:
 
 - Every card hangs off its list, and every list off its board. Nothing floats on its own.
 - Every card has a short name. The details are in its description.

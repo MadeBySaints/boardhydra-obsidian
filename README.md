@@ -91,6 +91,12 @@ Lists, labels and members are made in BoardHydra. A name in the note that doesn'
 clean graph: every card linked to its list, short names, a label on every card, and big tasks broken into checklists
 with sub-items. The AI shows you its plan first and only changes notes after you say yes.
 
+| Before | After |
+| --- | --- |
+| ![Before: a messy board in the graph, a grey tangle of unlabeled cards](images/tidy-before-graph.png) | ![After: the same board tidied, cards in label colors with their checklists](images/tidy-after-graph.png) |
+
+More before/after pictures, of the board, table, calendar, timeline, dashboard and map, are in [prompt.md](prompt.md).
+
 ## Requests
 Sync uses your plan's API requests: one per board when Obsidian starts, one per change you make. Live updates are free.
 Pro includes 500 requests a day.
