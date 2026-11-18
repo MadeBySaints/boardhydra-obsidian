@@ -25,8 +25,8 @@
 import type { BHCard, BHCheckItem, BHChecklist, BHLabel, BHLink, BHList, BHMember, BHNote, CardPatch } from './types'
 
 export interface Yaml {
-  parse(s: string): any
-  stringify(o: any): string
+  parse(s: string): unknown
+  stringify(o: unknown): string
 }
 
 export interface BoardCtx {
@@ -97,7 +97,7 @@ function renderItems(items: BHCheckItem[], indent: string): string[] {
  * existing: the note's current frontmatter, if any. Keys the plugin doesn't own are kept, and so are the
  * user's own tags (any tag without the bh/ prefix).
  */
-export function renderCard(c: BHCard, ctx: BoardCtx, yaml: Yaml, existing: Record<string, any> = {}): string {
+export function renderCard(c: BHCard, ctx: BoardCtx, yaml: Yaml, existing: Record<string, unknown> = {}): string {
   const fm: Record<string, unknown> = { bh_id: c.id, bh_board: c.idBoard, bh_updated: c.dateLastActivity }
   if (safeName(c.name) !== c.name) fm.name = c.name
   const list = ctx.lists.find((l) => l.id === c.idList)
@@ -124,7 +124,7 @@ export function renderCard(c: BHCard, ctx: BoardCtx, yaml: Yaml, existing: Recor
 
 export interface ParsedItem { name: string; done: boolean; children: ParsedItem[] }
 export interface ParsedNote {
-  fm: Record<string, any>
+  fm: Record<string, unknown>
   desc: string
   checklists: { name: string; items: ParsedItem[] }[]
   links: { url: string; title: string }[]
@@ -132,11 +132,11 @@ export interface ParsedNote {
 
 export function parseNote(text: string, yaml: Yaml): ParsedNote {
   const { fm, body } = splitFrontmatter(text)
-  let meta: Record<string, any> = {}
+  let meta: Record<string, unknown> = {}
   if (fm !== null) {
     try {
       const v = yaml.parse(fm)
-      if (v && typeof v === 'object') meta = v
+      if (v && typeof v === 'object') meta = v as Record<string, unknown>
     } catch {
       meta = {}
     }
@@ -337,16 +337,16 @@ export function noteFileName(n: BHNote, cardName: string): string {
 }
 
 /** A card's note: links to its card and its author, so the graph reads card → notes and person → notes. */
-export function renderCardNote(n: BHNote, cardLink: string, authorLink: string, yaml: Yaml, existing: Record<string, any> = {}): string {
+export function renderCardNote(n: BHNote, cardLink: string, authorLink: string, yaml: Yaml, existing: Record<string, unknown> = {}): string {
   const fm: Record<string, unknown> = { bh_note: n.id, bh_board: n.idBoard, bh_card: n.idCard, bh_updated: n.updatedAt, card: cardLink, author: authorLink, created: n.createdAt }
   for (const [k, v] of Object.entries(existing)) if (!NOTE_KEYS.has(k)) fm[k] = v
   return `---\n${yaml.stringify(fm).trimEnd()}\n---\n${n.body.trim()}\n`
 }
 
-export function parseCardNote(text: string, yaml: Yaml): { fm: Record<string, any>; body: string } {
+export function parseCardNote(text: string, yaml: Yaml): { fm: Record<string, unknown>; body: string } {
   const { fm, body } = splitFrontmatter(text)
-  let meta: Record<string, any> = {}
-  try { const v = fm === null ? null : yaml.parse(fm); if (v && typeof v === 'object') meta = v } catch { meta = {} }
+  let meta: Record<string, unknown> = {}
+  try { const v = fm === null ? null : yaml.parse(fm); if (v && typeof v === 'object') meta = v as Record<string, unknown> } catch { meta = {} }
   return { fm: meta, body: body.trim() }
 }
 

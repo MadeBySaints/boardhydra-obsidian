@@ -2,15 +2,26 @@ import { requestUrl } from 'obsidian'
 import type { BHBoard, BHCard, BHEvent, BHNote, BHSnapshot, CardPatch } from './types'
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string, public body?: any) {
+  constructor(public status: number, message: string, public body?: unknown) {
     super(message)
   }
 }
 
+/** The `error` field of a BoardHydra error response, if there is one. */
+function errorText(data: unknown): string | undefined {
+  if (data && typeof data === 'object' && 'error' in data && typeof data.error === 'string') return data.error
+  return undefined
+}
+
 /**
  * BoardHydra's public API. Ordinary calls use Obsidian's requestUrl: it isn't bound by CORS and sends no
- * Origin, which the server's write check expects. The event stream needs a streamed body, so it uses fetch;
- * the server allows read-only CORS for the Obsidian app's origins.
+ * Origin, which the server's write check expects.
+ *
+ * Why fetch for the event stream: requestUrl only returns once the whole response has arrived, and a live
+ * stream (server-sent events) never finishes, so it can't deliver updates. fetch gives a readable body we
+ * consume as it arrives. It only ever GETs one URL on the user's own BoardHydra server, and the server
+ * allows read-only CORS for the Obsidian app's origins on desktop (app://obsidian.md), iOS
+ * (capacitor://localhost) and Android (http://localhost).
  */
 export class Api {
   remaining: number | null = null
@@ -33,9 +44,9 @@ export class Api {
     }
     const rem = r.headers['x-ratelimit-remaining'] ?? r.headers['X-RateLimit-Remaining']
     if (rem !== undefined) this.remaining = Number(rem)
-    let data: any = null
+    let data: unknown = null
     try { data = r.text ? JSON.parse(r.text) : null } catch { data = null }
-    if (r.status >= 400) throw new ApiError(r.status, data?.error ?? `BoardHydra answered ${r.status}`, data)
+    if (r.status >= 400) throw new ApiError(r.status, errorText(data) ?? `BoardHydra answered ${r.status}`, data)
     return data as T
   }
 
@@ -61,7 +72,7 @@ export class Api {
     })
     if (!res.ok || !res.body) {
       let msg = `BoardHydra answered ${res.status}`
-      try { msg = (await res.json()).error ?? msg } catch { /* not JSON */ }
+      try { msg = errorText(await res.json()) ?? msg } catch { /* not JSON */ }
       throw new ApiError(res.status, msg)
     }
     onOpen()

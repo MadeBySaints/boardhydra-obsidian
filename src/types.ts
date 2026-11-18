@@ -59,7 +59,7 @@ export interface BHSnapshot {
   notes?: BHNote[]
 }
 
-export interface BHEvent { type: string; op: 'upsert' | 'delete'; data: any; origin?: string }
+export interface BHEvent { type: string; op: 'upsert' | 'delete'; data: { id: string }; origin?: string }
 
 /** The fields of a card a note can change (sent as a PATCH). */
 export interface CardPatch {

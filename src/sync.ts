@@ -1,7 +1,7 @@
 import { App, Notice, TAbstractFile, TFile, TFolder, normalizePath, parseYaml, stringifyYaml } from 'obsidian'
 import { Api, ApiError } from './api'
 import { BoardCtx, Yaml, checklistNotes, linkTarget, noteFileName, noteToPatch, parseCardNote, parseIndex, parseNote, posBetween, renderBoardNote, renderCard, renderCardNote, renderIndex, renderListNote, safeName, unlink, wikiLink } from './format'
-import type { BHCard, BHEvent, BHList, BHNote, BHSnapshot, CardPatch } from './types'
+import type { BHCard, BHEvent, BHLabel, BHList, BHNote, BHSnapshot, CardPatch } from './types'
 
 export interface Settings {
   server: string
@@ -388,9 +388,9 @@ export class SyncEngine {
       if (f instanceof TFolder) { await this.prune(f, keep); continue }
       if (!(f instanceof TFile) || f.extension !== 'md' || keep.has(f.path)) continue
       const kind = this.app.metadataCache.getFileCache(f)?.frontmatter?.bh_kind ?? parseNote(await this.app.vault.read(f), yaml).fm.bh_kind
-      if (kind === 'checklist' || kind === 'checkitem') await this.app.vault.delete(f)
+      if (kind === 'checklist' || kind === 'checkitem') await this.app.fileManager.trashFile(f)
     }
-    if (!dir.children.length) await this.app.vault.delete(dir).catch(() => {})
+    if (!dir.children.length) await this.app.fileManager.trashFile(dir).catch(() => {})
   }
 
   private scheduleIndex(st: BoardState) {
@@ -472,12 +472,12 @@ export class SyncEngine {
         break
       case 'list':
         st.snap.lists = st.snap.lists.filter((l) => l.id !== ev.data.id)
-        if (ev.op === 'upsert') st.snap.lists.push(ev.data)
+        if (ev.op === 'upsert') st.snap.lists.push(ev.data as BHList)
         await this.rerender(st)
         break
       case 'label':
         st.snap.labels = st.snap.labels.filter((l) => l.id !== ev.data.id)
-        if (ev.op === 'upsert') st.snap.labels.push(ev.data)
+        if (ev.op === 'upsert') st.snap.labels.push(ev.data as BHLabel)
         await this.rerender(st)
         break
       case 'members':
@@ -601,10 +601,11 @@ export class SyncEngine {
       await this.applyRemote(st, updated)
       if (patch.idList || patch.name || patch.dueComplete !== undefined) this.scheduleIndex(st)
     } catch (e) {
-      if (!(e instanceof ApiError) || e.status !== 409 || !e.body?.card) throw e
+      const theirs = e instanceof ApiError && e.status === 409 ? (e.body as { card?: BHCard } | null)?.card : undefined
+      if (!theirs) throw e
       await this.saveConflict(st, f, text)
       this.pending.delete(card.id)
-      await this.applyRemote(st, e.body.card as BHCard)
+      await this.applyRemote(st, theirs)
       new Notice(`BoardHydra: “${card.name}” changed in BoardHydra too. Your version is in ${CONFLICTS}/ — the note now shows the BoardHydra version.`, 12000)
     }
   }

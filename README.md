@@ -78,9 +78,17 @@ Lists, labels and members are made in BoardHydra. A name in the note that doesn'
 Sync uses your plan's API requests: one per board when Obsidian starts, one per change you make. Live updates are free.
 Pro includes 500 requests a day.
 
+## Disclosures
+- **Account required:** you need a BoardHydra account ([boardhydra.com](https://boardhydra.com)).
+- **Payment required:** syncing needs a paid BoardHydra plan, **Pro** or **Business**. The plugin itself is free and open source (MIT).
+- **Network use:** the plugin connects only to your BoardHydra server (`boardhydra.com` unless you change **Server** in
+  the settings), to read and update your boards and receive live updates. It sends nothing anywhere else, and has no
+  telemetry or ads.
+- **Files:** it only reads and writes inside the BoardHydra folder of your vault (set in the settings), plus its own settings file.
+
 ## Privacy
-The plugin talks only to BoardHydra (`boardhydra.com`). Its key is stored in this vault's plugin settings
-(`.obsidian/plugins/boardhydra/data.json`). Treat that file like a password, and leave it out of public vault backups.
+Its key is stored in this vault's plugin settings (`.obsidian/plugins/boardhydra/data.json`). Treat that file like a
+password, and leave it out of public vault backups.
 
 ## Develop
 ```
@@ -95,4 +103,6 @@ Set **Server** in the settings to a local BoardHydra (`http://localhost:8080`) f
 ## Release
 1. Bump `version` in `manifest.json` and `package.json`, and add it to `versions.json`.
 2. `npm run build`, then make a GitHub release whose tag is the version (no `v`), with `main.js`, `manifest.json` and `styles.css` attached.
-3. First release only: open a PR to `obsidianmd/obsidian-releases` that adds the plugin to `community-plugins.json`.
+3. First listing only: at [community.obsidian.md](https://community.obsidian.md), sign in, link the GitHub account that
+   owns this repo, and add the plugin ("Set up and claim"). Review is automatic; fix anything it flags with a new release.
+   Later releases need no submission, Obsidian picks them up from GitHub.
