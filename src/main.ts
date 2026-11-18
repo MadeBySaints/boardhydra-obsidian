@@ -1,4 +1,5 @@
-import { App, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian'
+import { App, Notice, Plugin, PluginSettingTab } from 'obsidian'
+import type { SettingDefinitionItem, SettingGroupItem } from 'obsidian'
 import { Api, ApiError } from './api'
 import { Settings, Status, SyncEngine, genId } from './sync'
 import type { BHBoard } from './types'
@@ -35,10 +36,10 @@ export default class BoardHydraPlugin extends Plugin {
     this.addSettingTab(new BoardHydraSettingTab(this.app, this))
 
     this.registerObsidianProtocolHandler('boardhydra', (params) => {
-      if (params.code) this.connectWithCode(params.code)
+      if (params.code) void this.connectWithCode(params.code)
     })
     this.addCommand({ id: 'sync-now', name: 'Sync now', callback: () => this.syncNow() })
-    this.addCommand({ id: 'connect', name: 'Connect to BoardHydra', callback: () => this.openConnect() })
+    this.addCommand({ id: 'connect', name: 'Connect account', callback: () => this.openConnect() })
     this.addCommand({
       id: 'add-card-note',
       name: 'Add a note to this card',
@@ -46,9 +47,9 @@ export default class BoardHydraPlugin extends Plugin {
         const f = this.app.workspace.getActiveFile()
         if (!f || !this.settings.key) return false
         if (checking) return true
-        this.engine.newNoteFor(f.path).then((p) => {
-          if (!p) return new Notice('BoardHydra: open a card note first.')
-          this.app.workspace.openLinkText(p, '', true)
+        void this.engine.newNoteFor(f.path).then((p) => {
+          if (!p) { new Notice('BoardHydra: open a card note first.'); return }
+          return this.app.workspace.openLinkText(p, '', true)
         })
         return true
       },
@@ -77,7 +78,8 @@ export default class BoardHydraPlugin extends Plugin {
   }
 
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULTS, await this.loadData())
+    const saved = (await this.loadData()) as Partial<Settings> | null
+    this.settings = { ...DEFAULTS, ...saved }
   }
 
   async saveSettings() {
@@ -124,6 +126,8 @@ export default class BoardHydraPlugin extends Plugin {
 class BoardHydraSettingTab extends PluginSettingTab {
   private boards: BHBoard[] | null = null
   private boardsErr = ''
+  private loading = false
+  private code = ''
 
   constructor(app: App, private plugin: BoardHydraPlugin) {
     super(app, plugin)
@@ -136,79 +140,134 @@ class BoardHydraSettingTab extends PluginSettingTab {
     super.hide()
   }
 
-  display(): void {
-    const { containerEl } = this
+  getControlValue(key: string): unknown {
+    return this.plugin.settings[key as keyof Settings]
+  }
+
+  async setControlValue(key: string, value: unknown): Promise<void> {
     const p = this.plugin
     const s = p.settings
-    containerEl.empty()
+    if (key === 'root') s.root = String(value).trim() || DEFAULTS.root
+    else if (key === 'server') s.server = String(value).trim() || DEFAULTS.server
+    else if (key === 'kanban' || key === 'checklists') s[key] = value === true
+    else return
+    await p.saveSettings()
+    if (key === 'kanban' || key === 'checklists') await p.engine.restart()
+  }
 
-    new Setting(containerEl).setName('Account').setHeading()
-    if (s.key) {
-      new Setting(containerEl)
-        .setName(s.userName ? `Connected as ${s.userName}` : 'Connected')
-        .setDesc('Obsidian sync is part of BoardHydra Pro. Disconnecting removes this vault’s key; your notes stay.')
-        .addButton((b) => b.setButtonText('Disconnect').setWarning().onClick(async () => { await p.disconnect(); this.boards = null; this.display() }))
-    } else {
-      new Setting(containerEl)
-        .setName('Connect')
-        .setDesc('Opens BoardHydra in your browser. Sign in, choose Connect, and you’ll come back here. Needs BoardHydra Pro.')
-        .addButton((b) => b.setButtonText('Connect').setCta().onClick(() => p.openConnect()))
-      let code = ''
-      new Setting(containerEl)
-        .setName('Paste code')
-        .setDesc('If Obsidian didn’t open by itself, paste the code the website showed you.')
-        .addText((t) => t.setPlaceholder('Code').onChange((v) => { code = v }))
-        .addButton((b) => b.setButtonText('Use code').onClick(async () => {
-          if (!code.trim()) return
-          await p.connectWithCode(code)
-          this.display()
-        }))
-    }
+  /** Loads the board list, then redraws the tab. Started by the "Loading" row, so it never runs at start-up. */
+  private loadBoards() {
+    if (this.loading) return
+    this.loading = true
+    this.plugin.api.boards()
+      .then((b) => { this.boards = b })
+      .catch((e) => { this.boardsErr = e instanceof ApiError ? e.message : 'Couldn’t load your boards' })
+      .finally(() => { this.loading = false; this.update() })
+  }
 
-    new Setting(containerEl).setName('Boards').setHeading()
+  getSettingDefinitions(): SettingDefinitionItem[] {
+    const p = this.plugin
+    const s = p.settings
+
+    const account: SettingGroupItem[] = s.key
+      ? [{
+          name: s.userName ? `Connected as ${s.userName}` : 'Connected',
+          desc: 'Obsidian sync is part of BoardHydra Pro. Disconnecting removes this vault’s key; your notes stay.',
+          aliases: ['disconnect', 'account'],
+          render: (row) => {
+            row.addButton((b) => b.setButtonText('Disconnect').setDestructive().onClick(async () => {
+              await p.disconnect()
+              this.boards = null
+              this.update()
+            }))
+          },
+        }]
+      : [{
+          name: 'Connect',
+          desc: 'Opens BoardHydra in your browser. Sign in, choose Connect, and you’ll come back here. Needs BoardHydra Pro.',
+          aliases: ['sign in', 'account'],
+          render: (row) => { row.addButton((b) => b.setButtonText('Connect').setCta().onClick(() => p.openConnect())) },
+        }, {
+          name: 'Paste code',
+          desc: 'If Obsidian didn’t open by itself, paste the code the website showed you.',
+          render: (row) => {
+            row.addText((t) => t.setPlaceholder('Code').setValue(this.code).onChange((v) => { this.code = v }))
+            row.addButton((b) => b.setButtonText('Use code').onClick(async () => {
+              if (!this.code.trim()) return
+              await p.connectWithCode(this.code)
+              this.code = ''
+              this.update()
+            }))
+          },
+        }]
+
+    let boards: SettingGroupItem[]
     if (!s.key) {
-      containerEl.createEl('p', { text: 'Connect first to choose boards.', cls: 'setting-item-description' })
-    } else if (this.boards === null && !this.boardsErr) {
-      containerEl.createEl('p', { text: 'Loading your boards…', cls: 'setting-item-description' })
-      p.api.boards().then((b) => { this.boards = b; this.display() }).catch((e) => {
-        this.boardsErr = e instanceof ApiError ? e.message : 'Couldn’t load your boards'
-        this.display()
-      })
+      boards = [{ name: 'Connect first to choose boards.', searchable: false }]
     } else if (this.boardsErr) {
-      const row = new Setting(containerEl).setDesc(this.boardsErr)
-      row.descEl.addClass('mod-warning')
-      row.addButton((b) => b.setButtonText('Try again').onClick(() => { this.boards = null; this.boardsErr = ''; this.display() }))
+      boards = [{
+        name: 'Couldn’t load your boards',
+        desc: this.boardsErr,
+        searchable: false,
+        render: (row) => {
+          row.descEl.addClass('mod-warning')
+          row.addButton((b) => b.setButtonText('Try again').onClick(() => { this.boardsErr = ''; this.update() }))
+        },
+      }]
+    } else if (this.boards === null) {
+      boards = [{ name: 'Loading your boards…', searchable: false, render: () => this.loadBoards() }]
+    } else if (!this.boards.length) {
+      boards = [{ name: 'You have no boards yet.', searchable: false }]
     } else {
-      for (const b of this.boards ?? []) {
-        new Setting(containerEl).setName(b.name).addToggle((t) => t.setValue(s.boards.includes(b.id)).onChange(async (on) => {
-          s.boards = on ? [...new Set([...s.boards, b.id])] : s.boards.filter((x) => x !== b.id)
-          await p.saveSettings()
-          await p.engine.restart()
-          await p.saveSettings()
-        }))
-      }
+      boards = this.boards.map((b): SettingGroupItem => ({
+        name: b.name,
+        render: (row) => {
+          row.addToggle((t) => t.setValue(s.boards.includes(b.id)).onChange(async (on) => {
+            s.boards = on ? [...new Set([...s.boards, b.id])] : s.boards.filter((x) => x !== b.id)
+            await p.saveSettings()
+            await p.engine.restart()
+            await p.saveSettings()
+          }))
+        },
+      }))
     }
 
-    new Setting(containerEl).setName('Sync').setHeading()
-    new Setting(containerEl)
-      .setName('Folder')
-      .setDesc('Where board folders go in this vault. Each board, list and card gets a note, linked board → lists → cards.')
-      .addText((t) => t.setValue(s.root).onChange(async (v) => { s.root = v.trim() || 'BoardHydra'; await p.saveSettings() }))
-    new Setting(containerEl)
-      .setName('Kanban note')
-      .setDesc('Also write a _Kanban note per board for the Kanban plugin, where dragging a card moves it. It links to every card, so the graph gets busier.')
-      .addToggle((t) => t.setValue(s.kanban).onChange(async (on) => { s.kanban = on; await p.saveSettings(); await p.engine.restart() }))
-    new Setting(containerEl)
-      .setName('Checklist notes')
-      .setDesc('A small note for each checklist, item and sub-item, linked to its card, so checklists grow around their card in the graph. Edit checklists in the card note.')
-      .addToggle((t) => t.setValue(s.checklists).onChange(async (on) => { s.checklists = on; await p.saveSettings(); await p.engine.restart() }))
-    new Setting(containerEl)
-      .setName('Sync now')
-      .setDesc(p.status.text || 'Reloads every chosen board (one request each).')
-      .addButton((b) => b.setButtonText('Sync now').onClick(async () => { await p.syncNow(); this.display() }))
-    new Setting(containerEl)
-      .setName('Server')
-      .setDesc('Only change this for a self-hosted or test server.')
-      .addText((t) => t.setValue(s.server).onChange(async (v) => { s.server = v.trim() || DEFAULTS.server; await p.saveSettings() }))
+    return [
+      { type: 'group', heading: 'Account', items: account },
+      { type: 'group', heading: 'Boards', items: boards },
+      {
+        type: 'group',
+        heading: 'Sync',
+        items: [
+          {
+            name: 'Folder',
+            desc: 'Where board folders go in this vault. Each board, list and card gets a note, linked board → lists → cards.',
+            control: { type: 'text', key: 'root', defaultValue: DEFAULTS.root },
+          },
+          {
+            name: 'Kanban note',
+            desc: 'Also write a _Kanban note per board for the Kanban plugin, where dragging a card moves it. It links to every card, so the graph gets busier.',
+            control: { type: 'toggle', key: 'kanban', defaultValue: DEFAULTS.kanban },
+          },
+          {
+            name: 'Checklist notes',
+            desc: 'A small note for each checklist, item and sub-item, linked to its card, so checklists grow around their card in the graph. Edit checklists in the card note.',
+            control: { type: 'toggle', key: 'checklists', defaultValue: DEFAULTS.checklists },
+          },
+          {
+            name: 'Sync now',
+            desc: p.status.text || 'Reloads every chosen board (one request each).',
+            render: (row) => {
+              row.addButton((b) => b.setButtonText('Sync now').onClick(async () => { await p.syncNow(); this.update() }))
+            },
+          },
+          {
+            name: 'Server',
+            desc: 'Only change this for a self-hosted or test server.',
+            control: { type: 'text', key: 'server', defaultValue: DEFAULTS.server },
+          },
+        ],
+      },
+    ]
   }
 }

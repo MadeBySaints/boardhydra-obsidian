@@ -39,12 +39,12 @@ export class Api {
     let r
     try {
       r = await requestUrl({ url: this.url(path), method, headers, body: body === undefined ? undefined : JSON.stringify(body), throw: false })
-    } catch (e) {
+    } catch {
       throw new ApiError(0, 'Can’t reach BoardHydra — check your connection')
     }
     const rem = r.headers['x-ratelimit-remaining'] ?? r.headers['X-RateLimit-Remaining']
     if (rem !== undefined) this.remaining = Number(rem)
-    let data: unknown = null
+    let data: unknown
     try { data = r.text ? JSON.parse(r.text) : null } catch { data = null }
     if (r.status >= 400) throw new ApiError(r.status, errorText(data) ?? `BoardHydra answered ${r.status}`, data)
     return data as T
@@ -89,7 +89,7 @@ export class Api {
         buf = buf.slice(i + 2)
         const data = chunk.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trimStart()).join('\n')
         if (!data) continue
-        try { onEvent(JSON.parse(data)) } catch { /* skip a bad message */ }
+        try { onEvent(JSON.parse(data) as BHEvent) } catch { /* skip a bad message */ }
       }
     }
   }

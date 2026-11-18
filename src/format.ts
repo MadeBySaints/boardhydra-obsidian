@@ -262,12 +262,12 @@ export function noteToPatch(parsed: ParsedNote, basename: string, card: BHCard |
   if (!card || parsed.desc !== (card.desc ?? '').trim()) p.desc = parsed.desc
 
   // a link written without quotes is read by YAML as a nested list: [["path|alias"]]
-  const rawList = Array.isArray(fm.list) ? `[[${String(fm.list.flat(2)[0] ?? '')}]]` : fm.list
+  const rawList = Array.isArray(fm.list) ? `[[${firstString(fm.list)}]]` : fm.list
   const listName = typeof rawList === 'string' ? unlink(rawList) : ''
   if (listName) {
     const open = ctx.lists.filter((l) => !l.closed)
     const l = open.find((x) => x.name === listName) ?? open.find((x) => lc(x.name) === lc(listName))
-    if (!l) warnings.push(`No list named “${fm.list}” on this board`)
+    if (!l) warnings.push(`No list named “${listName}” on this board`)
     else if (!card || l.id !== card.idList) p.idList = l.id
   }
 
@@ -350,9 +350,15 @@ export function parseCardNote(text: string, yaml: Yaml): { fm: Record<string, un
   return { fm: meta, body: body.trim() }
 }
 
+/** The first string in a (nested) YAML list, or ''. */
+function firstString(v: unknown[]): string {
+  const x: unknown = v.flat(2)[0]
+  return typeof x === 'string' || typeof x === 'number' ? String(x) : ''
+}
+
 /** The link target of a frontmatter link (YAML may read an unquoted [[link]] as a nested list). */
 export function linkTarget(v: unknown): string {
-  const raw = Array.isArray(v) ? `[[${String((v as unknown[]).flat(2)[0] ?? '')}]]` : typeof v === 'string' ? v : ''
+  const raw = Array.isArray(v) ? `[[${firstString(v)}]]` : typeof v === 'string' ? v : ''
   const m = /^\s*\[\[([^\]|]+)(?:\|[^\]]*)?\]\]\s*$/.exec(raw)
   return m ? m[1].trim() : raw.trim()
 }

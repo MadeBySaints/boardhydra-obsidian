@@ -387,7 +387,7 @@ export class SyncEngine {
     for (const f of [...dir.children]) {
       if (f instanceof TFolder) { await this.prune(f, keep); continue }
       if (!(f instanceof TFile) || f.extension !== 'md' || keep.has(f.path)) continue
-      const kind = this.app.metadataCache.getFileCache(f)?.frontmatter?.bh_kind ?? parseNote(await this.app.vault.read(f), yaml).fm.bh_kind
+      const kind: unknown = this.app.metadataCache.getFileCache(f)?.frontmatter?.bh_kind ?? parseNote(await this.app.vault.read(f), yaml).fm.bh_kind
       if (kind === 'checklist' || kind === 'checkitem') await this.app.fileManager.trashFile(f)
     }
     if (!dir.children.length) await this.app.fileManager.trashFile(dir).catch(() => {})
@@ -442,7 +442,7 @@ export class SyncEngine {
         try { await this.syncBoard(id) } catch (e) { if (this.handleFatal(e)) return }
       }
     }
-    run()
+    void run()
   }
 
   /** Fallback when this device can't hold a stream open: reload every 15 minutes. */
@@ -529,7 +529,7 @@ export class SyncEngine {
       this.app.vault.read(f).then((t) => {
         if (t === own) this.selfWrites.delete(f.path)
         else { this.selfWrites.delete(f.path); this.schedule(f.path) }
-      })
+      }).catch(() => this.selfWrites.delete(f.path))
       return
     }
     this.schedule(f.path)
