@@ -86,6 +86,11 @@ The description, in Markdown.
 
 Lists, labels and members are made in BoardHydra. A name in the note that doesn't exist on the board is skipped, with a notice.
 
+## Tidy up a board with AI
+[prompt.md](prompt.md) is a ready-made prompt for Claude, Codex, Gemini or another AI. It turns a messy board into a
+clean graph: every card linked to its list, short names, a label on every card, and big tasks broken into checklists
+with sub-items. The AI shows you its plan first and only changes notes after you say yes.
+
 ## Requests
 Sync uses your plan's API requests: one per board when Obsidian starts, one per change you make. Live updates are free.
 Pro includes 500 requests a day.
