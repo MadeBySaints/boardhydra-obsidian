@@ -1,12 +1,12 @@
 import { App, Notice, TAbstractFile, TFile, TFolder, normalizePath, parseYaml, stringifyYaml } from 'obsidian'
 import { Api, ApiError } from './api'
 import { BoardCtx, Yaml, checklistNotes, linkTarget, noteFileName, noteToPatch, parseCardNote, parseIndex, parseNote, posBetween, renderBoardNote, renderCard, renderCardNote, renderIndex, renderArchiveNote, renderListNote, safeName, unlink, wikiLink } from './format'
-import { ColorGroup, allColorGroups, mergeColorGroups, sameGroups } from './graph'
+import { ColorGroup, allColorGroups, mergeColorGroups, sameGroups, withArchiveFilter } from './graph'
 import type { BHCard, BHEvent, BHLabel, BHList, BHNote, BHSnapshot, CardPatch } from './types'
 
 // Obsidian's core graph plugin isn't in the public API; only these parts are used, and each is checked first.
-interface GraphPluginLike { options: { colorGroups?: unknown }; saveOptions(): void }
-interface GraphViewLike { dataEngine?: { setOptions?(o: { colorGroups: ColorGroup[] }): void } }
+interface GraphPluginLike { options: { colorGroups?: unknown; search?: unknown }; saveOptions(): void }
+interface GraphViewLike { dataEngine?: { setOptions?(o: { colorGroups?: ColorGroup[]; search?: string }): void } }
 
 function graphPlugin(app: App): GraphPluginLike | null {
   const ip = (app as unknown as { internalPlugins?: { getPluginById?(id: string): { instance?: unknown } | null } }).internalPlugins
@@ -26,6 +26,7 @@ export interface Settings {
   kanban: boolean // also write <board>/_Kanban.md (Kanban plugin format; it links to every card)
   checklists: boolean // write <board>/Checklists/<card>/… : one note per checklist and item, for the graph
   graphColors: boolean // keep a graph color group per label, in the label's BoardHydra color
+  hideArchived: boolean // keep `-path:_archive` in the graph's filter, so archived cards don't show
 }
 
 const yaml: Yaml = { parse: parseYaml, stringify: stringifyYaml }
@@ -118,27 +119,39 @@ export class SyncEngine {
     this.graphTimer = window.setTimeout(() => { this.applyGraphColors().catch(() => {}) }, 500)
   }
 
-  /** One graph color group per label (tag:#bh/<label>), in the label's color. Your own groups are kept, ahead of ours. */
+  /**
+   * One graph color group per label (tag:#bh/<label>), in the label's color. Your own groups are kept, ahead of ours.
+   * Also keeps archived cards out of the graph (a `-path:_archive` term in its filter) while hideArchived is on.
+   */
   async applyGraphColors() {
     const labels = this.s().graphColors ? [...this.boards.values()].flatMap((st) => [...st.snap.labels].sort((a, b) => a.pos - b.pos)) : []
-    if (this.s().graphColors && !this.boards.size) return // not synced yet: don't clear groups we wrote last time
+    const keepGroups = this.s().graphColors && !this.boards.size // not synced yet: don't clear groups we wrote last time
     const ours = this.s().graphColors ? allColorGroups(labels) : []
+    const hide = this.s().hideArchived !== false
     const graph = graphPlugin(this.app)
     if (graph) {
-      const next = mergeColorGroups(graph.options.colorGroups, ours)
-      if (sameGroups(graph.options.colorGroups, next)) return
-      graph.options.colorGroups = next
+      const groups = keepGroups ? graph.options.colorGroups : mergeColorGroups(graph.options.colorGroups, ours)
+      const search = withArchiveFilter(graph.options.search, hide)
+      const groupsChanged = !keepGroups && !sameGroups(graph.options.colorGroups, groups as ColorGroup[])
+      const searchChanged = search !== (typeof graph.options.search === 'string' ? graph.options.search : '')
+      if (!groupsChanged && !searchChanged) return
+      if (groupsChanged) graph.options.colorGroups = groups
+      if (searchChanged) graph.options.search = search
       graph.saveOptions()
-      for (const leaf of this.app.workspace.getLeavesOfType('graph')) (leaf.view as unknown as GraphViewLike).dataEngine?.setOptions?.({ colorGroups: next })
+      for (const leaf of this.app.workspace.getLeavesOfType('graph')) {
+        (leaf.view as unknown as GraphViewLike).dataEngine?.setOptions?.({ ...(groupsChanged ? { colorGroups: groups as ColorGroup[] } : {}), ...(searchChanged ? { search } : {}) })
+      }
       return
     }
-    // graph plugin not loaded: edit its settings file, so the colors are there when it is
+    // graph plugin not loaded: edit its settings file, so the colors and filter are there when it is
     const path = normalizePath(`${this.app.vault.configDir}/graph.json`)
     let cur: Record<string, unknown> = {}
     try { cur = JSON.parse(await this.app.vault.adapter.read(path)) as Record<string, unknown> } catch { /* no file yet */ }
-    const next = mergeColorGroups(cur.colorGroups, ours)
-    if (sameGroups(cur.colorGroups, next)) return
-    await this.app.vault.adapter.write(path, JSON.stringify({ ...cur, colorGroups: next }, null, 2))
+    const groups = keepGroups ? cur.colorGroups : mergeColorGroups(cur.colorGroups, ours)
+    const search = withArchiveFilter(cur.search, hide)
+    const groupsChanged = !keepGroups && !sameGroups(cur.colorGroups, groups as ColorGroup[])
+    if (!groupsChanged && search === (cur.search ?? '')) return
+    await this.app.vault.adapter.write(path, JSON.stringify({ ...cur, ...(groupsChanged ? { colorGroups: groups } : {}), search }, null, 2))
   }
 
   stop() {

@@ -68,6 +68,17 @@ export function mergeColorGroups(existing: unknown, ours: ColorGroup[]): ColorGr
   return [...mine, ...ours]
 }
 
+/** Graph filter term that hides archived cards (every board's _archive/ folder, its index note included). */
+export const ARCHIVE_FILTER = '-path:_archive'
+const ARCHIVE_TERM = /(^|\s)-path:_archive(?=\s|$)/g
+
+/** The graph's search with our archive term added (hide) or removed; whatever you typed yourself is kept as it is. */
+export function withArchiveFilter(search: unknown, hide: boolean): string {
+  const rest = (typeof search === 'string' ? search : '').replace(ARCHIVE_TERM, '').trim()
+  if (!hide) return rest
+  return rest ? `${rest} ${ARCHIVE_FILTER}` : ARCHIVE_FILTER
+}
+
 export function sameGroups(a: unknown, b: ColorGroup[]): boolean {
   return JSON.stringify(Array.isArray(a) ? a : []) === JSON.stringify(b)
 }

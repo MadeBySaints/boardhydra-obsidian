@@ -16,6 +16,7 @@ const DEFAULTS: Settings = {
   kanban: false,
   checklists: true,
   graphColors: true,
+  hideArchived: true,
 }
 
 export default class BoardHydraPlugin extends Plugin {
@@ -150,11 +151,11 @@ class BoardHydraSettingTab extends PluginSettingTab {
     const s = p.settings
     if (key === 'root') s.root = String(value).trim() || DEFAULTS.root
     else if (key === 'server') s.server = String(value).trim() || DEFAULTS.server
-    else if (key === 'kanban' || key === 'checklists' || key === 'graphColors') s[key] = value === true
+    else if (key === 'kanban' || key === 'checklists' || key === 'graphColors' || key === 'hideArchived') s[key] = value === true
     else return
     await p.saveSettings()
     if (key === 'kanban' || key === 'checklists') await p.engine.restart()
-    if (key === 'graphColors') await p.engine.applyGraphColors()
+    if (key === 'graphColors' || key === 'hideArchived') await p.engine.applyGraphColors()
   }
 
   /** Loads the board list, then redraws the tab. Started by the "Loading" row, so it never runs at start-up. */
@@ -261,6 +262,12 @@ class BoardHydraSettingTab extends PluginSettingTab {
             desc: 'Colors boards, lists, checklists and notes in the graph; checklist items are red until done, then green; cards take their first label’s BoardHydra color. Kept up to date. Your own groups stay and come first.',
             aliases: ['graph', 'colors', 'labels'],
             control: { type: 'toggle', key: 'graphColors', defaultValue: DEFAULTS.graphColors },
+          },
+          {
+            name: 'Hide archived cards in the graph',
+            desc: 'Keeps -path:_archive in the graph’s filter, so cards you archive in BoardHydra leave the graph. Done cards still show. Your own filter text stays.',
+            aliases: ['graph', 'archive', 'archived'],
+            control: { type: 'toggle', key: 'hideArchived', defaultValue: DEFAULTS.hideArchived },
           },
           {
             name: 'Sync now',

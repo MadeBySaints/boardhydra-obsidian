@@ -196,7 +196,7 @@ test('checklist notes: same names get their own files', () => {
 })
 
 // ---------- graph colors ----------
-import { labelColorGroups, mergeColorGroups } from '../src/graph'
+import { labelColorGroups, mergeColorGroups, withArchiveFilter } from '../src/graph'
 
 test('graph groups: one per colored label, board order, first board wins a name', () => {
   const g = labelColorGroups([
@@ -233,4 +233,14 @@ test('a restored card drops the archived flag but keeps the user own properties'
   assert.doesNotMatch(text, /archived:/)
   assert.doesNotMatch(text, /Archived cards/)
   assert.match(text, /mood: happy/)
+})
+
+test('withArchiveFilter adds or removes only our term and keeps the rest of the graph filter', () => {
+  assert.equal(withArchiveFilter('', true), '-path:_archive')
+  assert.equal(withArchiveFilter(undefined, true), '-path:_archive')
+  assert.equal(withArchiveFilter('tag:#work', true), 'tag:#work -path:_archive')
+  assert.equal(withArchiveFilter('tag:#work -path:_archive', true), 'tag:#work -path:_archive')
+  assert.equal(withArchiveFilter('-path:_archive tag:#work', false), 'tag:#work')
+  assert.equal(withArchiveFilter('-path:_archived', false), '-path:_archived')
+  assert.equal(withArchiveFilter('"two  spaces"', false), '"two  spaces"')
 })
