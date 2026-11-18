@@ -290,6 +290,13 @@ export class SyncEngine {
     return dir.children.find((f) => f instanceof TFile && f.extension === 'md' && this.noteCardId(f) === cardId)?.path
   }
 
+  /** a note in the board's _archive/ folder that carries this card's id */
+  private findArchived(st: BoardState, cardId: string): string | undefined {
+    const dir = this.app.vault.getAbstractFileByPath(normalizePath(`${st.folder}/${ARCHIVE}`))
+    if (!(dir instanceof TFolder)) return undefined
+    return dir.children.find((f) => f instanceof TFile && f.extension === 'md' && this.noteCardId(f) === cardId)?.path
+  }
+
   private uniquePath(st: BoardState, name: string, cardId: string): string {
     const base = safeName(name)
     for (let n = 1; ; n++) {
@@ -331,6 +338,18 @@ export class SyncEngine {
     if (this.pending.has(c.id)) return // a local edit is on its way up; it carries ifUpdatedAt and settles conflicts
     let path = this.pathById.get(c.id)
     if (!path || !this.app.vault.getAbstractFileByPath(path)) path = this.findLocal(st, c.id) ?? path // never start a second note for a card
+    // restored in BoardHydra: bring its note back out of _archive/ (or drop the stale copy if it already has a live one)
+    const archived = this.findArchived(st, c.id)
+    if (archived) {
+      if (path && this.app.vault.getAbstractFileByPath(path)) {
+        this.selfDeletes.add(archived)
+        const f = this.app.vault.getAbstractFileByPath(archived)
+        if (f instanceof TFile) await this.app.fileManager.trashFile(f)
+      } else {
+        path = this.uniquePath(st, c.name, c.id)
+        await this.move(archived, path)
+      }
+    }
     const want = this.uniquePath(st, c.name, c.id)
     if (path && this.app.vault.getAbstractFileByPath(path) && path !== want && !path.endsWith(`/${safeName(c.name)}.md`)) {
       await this.move(path, want) // renamed in BoardHydra
@@ -378,6 +397,8 @@ export class SyncEngine {
         if (!(f instanceof TFile) || f.extension !== 'md' || f.path === path) continue
         const id: unknown = this.app.metadataCache.getFileCache(f)?.frontmatter?.bh_id ?? parseNote(await this.app.vault.read(f), yaml).fm.bh_id
         if (typeof id !== 'string') continue
+        const live = st.cards.get(id)
+        if (live && !live.closed) continue // restored on the board: applyRemote moves its note back out
         await this.markArchived(f, link)
         cards.push({ link: wikiLink(f.path.replace(/\.md$/, ''), f.basename) })
       }

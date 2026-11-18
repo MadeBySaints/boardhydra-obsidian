@@ -227,3 +227,10 @@ test('graph groups: note types first, then labels, then plain cards; all of them
   const mine = { query: 'path:Daily', color: { a: 1, rgb: 1 } }
   assert.deepEqual(mergeColorGroups([...all, mine], []), [mine])
 })
+
+test('a restored card drops the archived flag but keeps the user own properties', () => {
+  const text = renderCard(card, ctx, yaml, { archived: true, list: '[[x/_archive/Archived cards|Archived cards]]', mood: 'happy' })
+  assert.doesNotMatch(text, /archived:/)
+  assert.doesNotMatch(text, /Archived cards/)
+  assert.match(text, /mood: happy/)
+})

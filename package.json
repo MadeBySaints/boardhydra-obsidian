@@ -1,6 +1,6 @@
 {
   "name": "boardhydra-obsidian",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "description": "BoardHydra sync for Obsidian",
   "main": "main.js",
   "private": true,

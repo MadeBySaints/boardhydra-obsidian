@@ -41,7 +41,8 @@ export interface BoardCtx {
 export const TAG_PREFIX = 'bh/'
 
 /** Frontmatter keys the plugin writes; everything else in a note's frontmatter is the user's and is kept. */
-const OWN_KEYS = new Set(['bh_id', 'bh_board', 'bh_updated', 'name', 'list', 'labels', 'tags', 'members', 'start', 'due', 'done'])
+// `archived` is set on notes in _archive/; a live card's note drops it (the card was restored)
+const OWN_KEYS = new Set(['bh_id', 'bh_board', 'bh_updated', 'name', 'list', 'labels', 'tags', 'members', 'start', 'due', 'done', 'archived'])
 
 const CHECKLIST = '## Checklist: '
 const LINKS = '## Links'
