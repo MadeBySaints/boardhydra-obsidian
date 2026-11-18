@@ -2,6 +2,8 @@
 
 This page is a ready-made prompt that turns a messy board into a clean Obsidian graph. When it's done, the graph looks like this:
 
+![A large board in the graph view: the board in purple at the center, lists in blue, cards in their label colors, checklists in amber, and checklist items in red (open) or green (done)](images/tidy-graph.png)
+
 - Every card hangs off its list, and every list off its board. Nothing floats on its own.
 - Every card has a short name. The details are in its description.
 - Every card has at least one label, so every dot in the graph has a color.
