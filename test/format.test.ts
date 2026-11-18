@@ -44,6 +44,16 @@ test('a rendered card parses back to no changes', () => {
   assert.deepEqual(warnings, [])
 })
 
+test('a Markdown description round-trips unchanged', () => {
+  const desc = '# Plan\n\n**Bold**, *italic*, `code` and [a link](https://example.com).\n\n- one\n  - nested\n- [ ] a task\n- [x] done task\n1. first\n\n> quote\n\n```js\nconst x = 1 // ## Links\n```\n\n---\n## Notes heading'
+  const md = { ...card, desc }
+  const text = renderCard(md, ctx, yaml)
+  const parsed = parseNote(text, yaml)
+  assert.equal(parsed.desc, desc)
+  assert.equal(parsed.checklists.length, 1) // the desc's task list is not taken for a checklist
+  assert.deepEqual(noteToPatch(parsed, safeName(md.name), md, ctx, genId).patch, {})
+})
+
 test('edits become a patch', () => {
   let text = renderCard(card, ctx, yaml)
   text = text.replace('Some **notes**', 'New text').replace('- [ ] two', '- [x] two').replace('list: To do', 'list: done')
