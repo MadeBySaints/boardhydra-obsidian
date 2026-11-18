@@ -129,6 +129,13 @@ class BoardHydraSettingTab extends PluginSettingTab {
     super(app, plugin)
   }
 
+  /** Forget the board list (and any error loading it) so the next visit loads it fresh. */
+  hide(): void {
+    this.boards = null
+    this.boardsErr = ''
+    super.hide()
+  }
+
   display(): void {
     const { containerEl } = this
     const p = this.plugin
@@ -168,7 +175,9 @@ class BoardHydraSettingTab extends PluginSettingTab {
         this.display()
       })
     } else if (this.boardsErr) {
-      containerEl.createEl('p', { text: this.boardsErr, cls: 'setting-item-description mod-warning' })
+      const row = new Setting(containerEl).setDesc(this.boardsErr)
+      row.descEl.addClass('mod-warning')
+      row.addButton((b) => b.setButtonText('Try again').onClick(() => { this.boards = null; this.boardsErr = ''; this.display() }))
     } else {
       for (const b of this.boards ?? []) {
         new Setting(containerEl).setName(b.name).addToggle((t) => t.setValue(s.boards.includes(b.id)).onChange(async (on) => {
