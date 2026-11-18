@@ -4,11 +4,17 @@ Sync your [BoardHydra](https://boardhydra.com) boards with your vault, both ways
 a note, linked board → lists → cards, so the graph view shows your boards as trees. Labels become `#bh/…` tags.
 Needs BoardHydra **Pro** or **Business**.
 
+![A card as a note: properties, description and checklist, with its local graph showing the checklist, people, tags and notes around it](images/card-note.png)
+
+![Two synced boards in the graph view, colored by board, with finished items highlighted](images/graph.png)
+
 ## Connect
 1. Install the plugin and turn it on.
 2. Settings → BoardHydra → **Connect**. Your browser opens BoardHydra. Sign in and choose **Connect**.
 3. Obsidian opens again and finishes. If it doesn't, copy the code from the page into **Paste code**.
 4. Choose the boards to sync.
+
+![The plugin settings: account, boards to sync, folder, Kanban note and checklist notes](images/settings.png)
 
 Disconnect any time in the plugin settings, or on the website under Account → Integrations.
 
