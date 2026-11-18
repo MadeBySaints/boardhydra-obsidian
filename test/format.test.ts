@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
 import { parse, stringify } from 'yaml'
-import { checklistNotes, labelTag, noteToPatch, parseIndex, parseNote, posBetween, renderBoardNote, renderCard, renderIndex, renderListNote, safeName, unlink } from '../src/format'
+import { checklistNotes, labelTag, noteToPatch, parseIndex, parseNote, posBetween, renderBoardNote, renderCard, renderGuideNote, renderIndex, renderListNote, safeName, unlink } from '../src/format'
 import type { BHCard } from '../src/types'
 
 const yaml = { parse: (s: string) => parse(s), stringify: (o: any) => stringify(o) }
@@ -149,6 +149,12 @@ test('unlink', () => {
   assert.equal(unlink('[[a/b/To do|To do]]'), 'To do')
   assert.equal(unlink('[[a/b/Done]]'), 'Done')
   assert.equal(unlink(' plain '), 'plain')
+})
+
+test('the AI guide note links up to its board and is marked as a guide', () => {
+  const g = renderGuideNote('b', '[[BoardHydra/B|B]]', '# B — guide for AI\n\n## Lists\n')
+  assert.match(g, /^---\nbh_board: b\nbh_kind: guide\n---\nBoard: \[\[BoardHydra\/B\|B\]\]\n\n# B — guide for AI/)
+  assert.doesNotMatch(g, /bh_id|list:/) // never read as a card
 })
 
 test('board and list notes link down the tree', () => {

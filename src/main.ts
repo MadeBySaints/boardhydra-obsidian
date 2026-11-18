@@ -17,6 +17,7 @@ const DEFAULTS: Settings = {
   checklists: true,
   graphColors: true,
   hideArchived: true,
+  guide: true,
 }
 
 export default class BoardHydraPlugin extends Plugin {
@@ -151,10 +152,10 @@ class BoardHydraSettingTab extends PluginSettingTab {
     const s = p.settings
     if (key === 'root') s.root = String(value).trim() || DEFAULTS.root
     else if (key === 'server') s.server = String(value).trim() || DEFAULTS.server
-    else if (key === 'kanban' || key === 'checklists' || key === 'graphColors' || key === 'hideArchived') s[key] = value === true
+    else if (key === 'kanban' || key === 'checklists' || key === 'graphColors' || key === 'hideArchived' || key === 'guide') s[key] = value === true
     else return
     await p.saveSettings()
-    if (key === 'kanban' || key === 'checklists') await p.engine.restart()
+    if (key === 'kanban' || key === 'checklists' || key === 'guide') await p.engine.restart()
     if (key === 'graphColors' || key === 'hideArchived') await p.engine.applyGraphColors()
   }
 
@@ -251,6 +252,12 @@ class BoardHydraSettingTab extends PluginSettingTab {
             name: 'Kanban note',
             desc: 'Also write a _Kanban note per board for the Kanban plugin, where dragging a card moves it. It links to every card, so the graph gets busier.',
             control: { type: 'toggle', key: 'kanban', defaultValue: DEFAULTS.kanban },
+          },
+          {
+            name: 'AI guide note',
+            desc: 'An _AI guide note per board that explains it to an AI working in this vault: lists, labels, members, how the notes work, and the API. Refreshed every few hours (one request).',
+            aliases: ['ai', 'guide', 'claude', 'codex', 'gemini'],
+            control: { type: 'toggle', key: 'guide', defaultValue: DEFAULTS.guide },
           },
           {
             name: 'Checklist notes',

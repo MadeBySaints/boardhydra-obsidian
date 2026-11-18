@@ -50,6 +50,20 @@ export class Api {
     return data as T
   }
 
+  /** The board's guide for AI, as Markdown (GET /boards/{id}/guide.md). */
+  async guide(id: string): Promise<string> {
+    let r
+    try {
+      r = await requestUrl({ url: this.url(`/boards/${encodeURIComponent(id)}/guide.md`), headers: { Authorization: 'Bearer ' + this.key(), 'X-Client-Id': this.clientId }, throw: false })
+    } catch {
+      throw new ApiError(0, 'Can’t reach BoardHydra — check your connection')
+    }
+    const rem = r.headers['x-ratelimit-remaining'] ?? r.headers['X-RateLimit-Remaining']
+    if (rem !== undefined) this.remaining = Number(rem)
+    if (r.status >= 400) throw new ApiError(r.status, `BoardHydra answered ${r.status}`)
+    return r.text
+  }
+
   me() { return this.req<{ id: string; name: string; email: string }>('GET', '/me') }
   boards() { return this.req<BHBoard[]>('GET', '/boards') }
   snapshot(id: string) { return this.req<BHSnapshot>('GET', `/boards/${encodeURIComponent(id)}`) }

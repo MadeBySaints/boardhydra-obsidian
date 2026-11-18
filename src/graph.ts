@@ -19,6 +19,7 @@ export const KIND_GROUPS: ColorGroup[] = [
   { query: '[bh_kind:list]', color: rgb('#29c4ff') },
   { query: '[bh_kind:board]', color: rgb('#7b2bff') },
   { query: '[bh_kind:archive]', color: rgb('#5a5470') },
+  { query: '[bh_kind:guide]', color: rgb('#b9a6ff') }, // the AI guide note
   { query: '[bh_board] [kanban-plugin]', color: rgb('#b45cff') }, // the optional Kanban note
   { query: '[bh_note]', color: rgb('#d9c2ff') }, // notes on cards
   { query: '[bh_id] [archived:true]', color: rgb('#5a5470') },

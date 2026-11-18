@@ -1,6 +1,6 @@
 import { App, Notice, TAbstractFile, TFile, TFolder, normalizePath, parseYaml, stringifyYaml } from 'obsidian'
 import { Api, ApiError } from './api'
-import { BoardCtx, Yaml, checklistNotes, linkTarget, noteFileName, noteToPatch, parseCardNote, parseIndex, parseNote, posBetween, renderBoardNote, renderCard, renderCardNote, renderIndex, renderArchiveNote, renderListNote, safeName, unlink, wikiLink } from './format'
+import { BoardCtx, Yaml, checklistNotes, linkTarget, noteFileName, noteToPatch, parseCardNote, parseIndex, parseNote, posBetween, renderBoardNote, renderCard, renderCardNote, renderGuideNote, renderIndex, renderArchiveNote, renderListNote, safeName, unlink, wikiLink } from './format'
 import { ColorGroup, allColorGroups, mergeColorGroups, sameGroups, withArchiveFilter } from './graph'
 import type { BHCard, BHEvent, BHLabel, BHList, BHNote, BHSnapshot, CardPatch } from './types'
 
@@ -27,6 +27,7 @@ export interface Settings {
   checklists: boolean // write <board>/Checklists/<card>/… : one note per checklist and item, for the graph
   graphColors: boolean // keep a graph color group per label, in the label's BoardHydra color
   hideArchived: boolean // keep `-path:_archive` in the graph's filter, so archived cards don't show
+  guide: boolean // write <board>/_AI guide.md: the server's guide that explains the board to an AI working in the vault
 }
 
 const yaml: Yaml = { parse: parseYaml, stringify: stringifyYaml }
@@ -35,6 +36,8 @@ const ARCHIVE = '_archive'
 const CONFLICTS = '_conflicts'
 const LISTS = 'Lists'
 const KANBAN = '_Kanban'
+const GUIDE = '_AI guide'
+const GUIDE_EVERY = 6 * 60 * 60 * 1000 // refresh the guide at most this often (one request each)
 const NOTES = 'Notes'
 const CHECKLISTS = 'Checklists'
 const ARCHIVE_NOTE = 'Archived cards'
@@ -61,6 +64,7 @@ export type Status = { text: string; error?: boolean }
 export class SyncEngine {
   private boards = new Map<string, BoardState>()
   private pathById = new Map<string, string>()
+  private guideAt = new Map<string, number>() // board id → when its AI guide note was last fetched
   private selfWrites = new Map<string, string>() // path → text we just wrote (its modify event is ours)
   private selfMoves = new Set<string>() // paths we just renamed to
   private timers = new Map<string, number>()
@@ -270,6 +274,7 @@ export class SyncEngine {
       }
     }
     await this.writeIndex(st) // also writes the card notes
+    await this.writeGuide(st).catch((e) => console.warn('BoardHydra: AI guide note', e))
     this.refreshStatus()
     this.scheduleGraph()
   }
@@ -421,6 +426,22 @@ export class SyncEngine {
       const old = this.app.vault.getAbstractFileByPath(path)
       if (old instanceof TFile) await this.app.fileManager.trashFile(old)
     }
+  }
+
+  /** <board>/_AI guide.md: the server's guide for AI, refreshed at most every GUIDE_EVERY; removed when turned off. */
+  private async writeGuide(st: BoardState) {
+    const path = normalizePath(`${st.folder}/${GUIDE}.md`)
+    if (!this.s().guide) {
+      const old = this.app.vault.getAbstractFileByPath(path)
+      if (old instanceof TFile) await this.app.fileManager.trashFile(old)
+      return
+    }
+    const at = this.guideAt.get(st.id) ?? 0
+    if (Date.now() - at < GUIDE_EVERY && this.app.vault.getAbstractFileByPath(path)) return
+    const md = await this.api.guide(st.id)
+    this.guideAt.set(st.id, Date.now())
+    const boardPath = this.boardNotePath(st)
+    await this.write(path, renderGuideNote(st.id, wikiLink(boardPath.replace(/\.md$/, ''), st.snap.board.name), md))
   }
 
   /** the board's own note: BoardHydra/<board>.md, linking to its lists */

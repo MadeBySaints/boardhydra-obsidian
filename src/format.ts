@@ -374,6 +374,13 @@ export function renderBoardNote(boardId: string, name: string, desc: string, lis
   return out.join('\n')
 }
 
+/** The board's guide for AI (from the server), linked up to the board so it stays in the graph tree. */
+export function renderGuideNote(boardId: string, boardLink: string, guide: string): string {
+  const out = ['---', `bh_board: ${boardId}`, 'bh_kind: guide', '---', `Board: ${boardLink}`, '', guide.trim(), '',
+    '_Kept up to date by the BoardHydra plugin (every few hours). Edits here are replaced._', '']
+  return out.join('\n')
+}
+
 /** A list's note: links up to its board and down to its cards, in order. */
 export function renderListNote(boardId: string, list: BHList, boardLink: string, cards: { link: string; done: boolean }[]): string {
   const out = ['---', `bh_board: ${boardId}`, `bh_list: ${list.id}`, 'bh_kind: list', '---', `# ${list.name}`, '', `Board: ${boardLink}`, '', '## Cards']
