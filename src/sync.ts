@@ -464,11 +464,8 @@ export class SyncEngine {
     const boardPath = this.boardNotePath(st)
     await this.write(boardPath, renderBoardNote(st.id, st.snap.board.name, st.snap.board.desc ?? '', lists.map((l) => ({ link: link(paths.get(l.id)!, l.name) }))))
     await this.ensureFolder(`${st.folder}/${LISTS}`)
-    for (const l of lists) {
-      const inList = cards.filter((c) => c.idList === l.id).map((c) => ({ link: link(this.pathById.get(c.id)!, c.name), done: c.dueComplete }))
-      await this.write(paths.get(l.id)!, renderListNote(st.id, l, link(boardPath, st.snap.board.name), inList))
-    }
-    // list notes for lists that are gone or renamed
+    // list notes for lists that are gone or renamed. Removed first: on Windows and macOS "DONE.md" and "Done.md"
+    // are the same file, so an archived "DONE" list would block the note of a new "Done" list.
     const keep = new Set(paths.values())
     const dir = this.app.vault.getAbstractFileByPath(normalizePath(`${st.folder}/${LISTS}`))
     if (dir instanceof TFolder) {
@@ -476,6 +473,12 @@ export class SyncEngine {
         if (!(f instanceof TFile) || keep.has(f.path)) continue
         if (parseNote(await this.app.vault.read(f), yaml).fm.bh_kind === 'list') await this.app.fileManager.trashFile(f)
       }
+    }
+    for (const l of lists) {
+      const inList = cards.filter((c) => c.idList === l.id).map((c) => ({ link: link(this.pathById.get(c.id)!, c.name), done: c.dueComplete }))
+      // one list note that can't be written shouldn't stop the checklists and archive below
+      await this.write(paths.get(l.id)!, renderListNote(st.id, l, link(boardPath, st.snap.board.name), inList))
+        .catch((e) => console.warn('BoardHydra: list note', l.name, e))
     }
     for (const n of st.notes.values()) await this.applyRemoteNote(st, n) // keeps card links current after renames
     await this.writeChecklists(st, cards)
