@@ -1,7 +1,7 @@
 import { App, Notice, TAbstractFile, TFile, TFolder, normalizePath, parseYaml, stringifyYaml } from 'obsidian'
 import { Api, ApiError } from './api'
-import { BoardCtx, Yaml, checklistNotes, linkTarget, noteFileName, noteToPatch, parseCardNote, parseIndex, parseNote, posBetween, renderBoardNote, renderCard, renderCardNote, renderIndex, renderListNote, safeName, unlink, wikiLink } from './format'
-import { ColorGroup, labelColorGroups, mergeColorGroups, sameGroups } from './graph'
+import { BoardCtx, Yaml, checklistNotes, linkTarget, noteFileName, noteToPatch, parseCardNote, parseIndex, parseNote, posBetween, renderBoardNote, renderCard, renderCardNote, renderIndex, renderArchiveNote, renderListNote, safeName, unlink, wikiLink } from './format'
+import { ColorGroup, allColorGroups, mergeColorGroups, sameGroups } from './graph'
 import type { BHCard, BHEvent, BHLabel, BHList, BHNote, BHSnapshot, CardPatch } from './types'
 
 // Obsidian's core graph plugin isn't in the public API; only these parts are used, and each is checked first.
@@ -36,6 +36,7 @@ const LISTS = 'Lists'
 const KANBAN = '_Kanban'
 const NOTES = 'Notes'
 const CHECKLISTS = 'Checklists'
+const ARCHIVE_NOTE = 'Archived cards'
 
 export function genId(): string {
   const b = new Uint8Array(12)
@@ -121,7 +122,7 @@ export class SyncEngine {
   async applyGraphColors() {
     const labels = this.s().graphColors ? [...this.boards.values()].flatMap((st) => [...st.snap.labels].sort((a, b) => a.pos - b.pos)) : []
     if (this.s().graphColors && !this.boards.size) return // not synced yet: don't clear groups we wrote last time
-    const ours = labelColorGroups(labels)
+    const ours = this.s().graphColors ? allColorGroups(labels) : []
     const graph = graphPlugin(this.app)
     if (graph) {
       const next = mergeColorGroups(graph.options.colorGroups, ours)
@@ -351,13 +352,40 @@ export class SyncEngine {
     let to = normalizePath(`${dir}/${f.name}`)
     for (let n = 2; this.app.vault.getAbstractFileByPath(to); n++) to = normalizePath(`${dir}/${f.basename} (${n}).md`)
     await this.move(path, to)
-    // an archived card is on no list: drop the link, so the graph stops drawing it on its old list
+    // an archived card hangs off the board's "Archived cards" note instead of its old list
     const moved = this.app.vault.getAbstractFileByPath(to)
-    if (moved instanceof TFile) {
-      await this.app.fileManager.processFrontMatter(moved, (fm: Record<string, unknown>) => {
-        delete fm.list
-        fm.archived = true
-      }).catch(() => {})
+    if (moved instanceof TFile) await this.markArchived(moved, wikiLink(`${dir}/${ARCHIVE_NOTE}`, ARCHIVE_NOTE))
+  }
+
+  private async markArchived(f: TFile, link: string) {
+    const fm = this.app.metadataCache.getFileCache(f)?.frontmatter
+    if (fm && fm.list === link && fm.archived === true) return
+    await this.app.fileManager.processFrontMatter(f, (m: Record<string, unknown>) => {
+      m.list = link
+      m.archived = true
+    }).catch(() => {})
+  }
+
+  /** <board>/_archive/Archived cards.md, linking the board to every archived card note (removed when there are none). */
+  private async writeArchive(st: BoardState, boardLink: string) {
+    const dir = normalizePath(`${st.folder}/${ARCHIVE}`)
+    const path = normalizePath(`${dir}/${ARCHIVE_NOTE}.md`)
+    const link = wikiLink(path.replace(/\.md$/, ''), ARCHIVE_NOTE)
+    const folder = this.app.vault.getAbstractFileByPath(dir)
+    const cards: { link: string }[] = []
+    if (folder instanceof TFolder) {
+      for (const f of [...folder.children]) {
+        if (!(f instanceof TFile) || f.extension !== 'md' || f.path === path) continue
+        const id: unknown = this.app.metadataCache.getFileCache(f)?.frontmatter?.bh_id ?? parseNote(await this.app.vault.read(f), yaml).fm.bh_id
+        if (typeof id !== 'string') continue
+        await this.markArchived(f, link)
+        cards.push({ link: wikiLink(f.path.replace(/\.md$/, ''), f.basename) })
+      }
+    }
+    if (cards.length) await this.write(path, renderArchiveNote(st.id, boardLink, cards))
+    else {
+      const old = this.app.vault.getAbstractFileByPath(path)
+      if (old instanceof TFile) await this.app.fileManager.trashFile(old)
     }
   }
 
@@ -451,6 +479,7 @@ export class SyncEngine {
     }
     for (const n of st.notes.values()) await this.applyRemoteNote(st, n) // keeps card links current after renames
     await this.writeChecklists(st, cards)
+    await this.writeArchive(st, link(boardPath, st.snap.board.name))
     if (this.s().kanban) {
       await this.write(this.indexPath(st), renderIndex(st.id, st.snap.lists, cards, (c) => this.pathById.get(c.id)!.replace(/\.md$/, '')))
     }

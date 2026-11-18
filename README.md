@@ -68,9 +68,10 @@ The description, in Markdown.
 - **Notes on cards** (the Notes section at the bottom of a card in BoardHydra) each get their own note in `Notes/`,
   linked to the card and to the person who wrote it. Edit or delete your own there and it syncs; other people's
   notes are read-only. To write one, open a card note and run **Add a note to this card**.
-- **Graph colors follow your labels**: the plugin keeps one graph color group per label (`tag:#bh/…`) in the label's
-  BoardHydra color, and updates it when labels change. Your own color groups are kept and come first. A card with
-  several labels takes the color of its first one in board order. Turn it off under **Color the graph by label**.
+- **Graph colors**: boards, lists, checklists, notes and archived cards each get a color; checklist items are red
+  until they're done, then green; cards take their first label's BoardHydra color (in board order), and gray-green
+  without one. The groups update when labels change. Your own color groups are kept and come first. Turn it off
+  under **Color the graph by label**.
 - In the graph view, turn on **Tags** under Filters to see labels as nodes too.
 - **Checklists in the graph**: each checklist, item and sub-item gets a small note in `Checklists/<card>/`, linked
   card → checklist → items → sub-items, so checklists sprout around their card in the graph. They're read-only (edit
@@ -78,7 +79,8 @@ The description, in Markdown.
   finished items. Turn them off under **Checklist notes** in settings.
 - **New note in a board folder**: a new card in the `list:` you give (or the first list).
 - **Delete a note**: the card is archived in BoardHydra, never deleted. Restore it from the board's archive.
-- **Archived cards** move to `_archive/` with `archived: true` and no `list:`, so they leave their list in the graph.
+- **Archived cards** move to `_archive/` with `archived: true`, linked from the board's `Archived cards` note, so they
+  leave their list but stay connected in the graph.
 - **Changes in BoardHydra** show up live.
 - **Both changed at once**: the note shows the BoardHydra version, and yours is saved in `_conflicts/`.
 
@@ -96,7 +98,7 @@ Pro includes 500 requests a day.
   telemetry or ads.
 - **Files:** it only reads and writes inside the BoardHydra folder of your vault (set in the settings), plus its own settings file
   and, while **Color the graph by label** is on, the color groups in the graph view's settings (`.obsidian/graph.json`;
-  only groups whose query starts with `tag:#bh/` are changed).
+  only groups whose query starts with `tag:#bh/` or `[bh_` are changed).
 
 ## Privacy
 Its key is stored in this vault's plugin settings (`.obsidian/plugins/boardhydra/data.json`). Treat that file like a

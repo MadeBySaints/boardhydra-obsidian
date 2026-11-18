@@ -5,8 +5,32 @@ import type { BHLabel } from './types'
 
 export interface ColorGroup { query: string; color: { a: number; rgb: number } }
 
-/** Queries the plugin owns. Groups you make yourself never start with this, so they stay put. */
-export const GROUP_PREFIX = 'tag:#bh/'
+/** Queries the plugin owns start with one of these; groups you make yourself stay put. */
+const OWN_PREFIXES = ['tag:#bh/', '[bh_']
+const isOwn = (q: string) => OWN_PREFIXES.some((p) => q.startsWith(p))
+
+const rgb = (hex: string) => ({ a: 1, rgb: parseInt(hex.slice(1), 16) })
+
+/** Colors by note type, ahead of the labels (a node takes the first group it matches). */
+export const KIND_GROUPS: ColorGroup[] = [
+  { query: '[bh_kind:checkitem] [done:true]', color: rgb('#34c759') }, // finished items: green
+  { query: '[bh_kind:checkitem]', color: rgb('#ff3b30') }, // open items: red
+  { query: '[bh_kind:checklist]', color: rgb('#ffb347') },
+  { query: '[bh_kind:list]', color: rgb('#29c4ff') },
+  { query: '[bh_kind:board]', color: rgb('#7b2bff') },
+  { query: '[bh_kind:archive]', color: rgb('#5a5470') },
+  { query: '[bh_board] [kanban-plugin]', color: rgb('#b45cff') }, // the optional Kanban note
+  { query: '[bh_note]', color: rgb('#d9c2ff') }, // notes on cards
+  { query: '[bh_id] [archived:true]', color: rgb('#5a5470') },
+]
+
+/** Cards with no colored label. */
+export const CARD_GROUP: ColorGroup = { query: '[bh_id]', color: rgb('#8fa8a0') }
+
+/** Every group the plugin keeps: note types, then labels in board order, then plain cards. */
+export function allColorGroups(labels: BHLabel[]): ColorGroup[] {
+  return [...KIND_GROUPS, ...labelColorGroups(labels), CARD_GROUP]
+}
 
 // the free colors, for servers that don't send `hex` yet (mirror of web/src/lib/colors.ts)
 const FREE_HEX: Record<string, string> = {
@@ -40,7 +64,7 @@ function isGroup(g: unknown): g is ColorGroup {
 
 /** Your own groups first (they win), then ours, replacing whatever we wrote before. */
 export function mergeColorGroups(existing: unknown, ours: ColorGroup[]): ColorGroup[] {
-  const mine = (Array.isArray(existing) ? existing : []).filter(isGroup).filter((g) => !g.query.startsWith(GROUP_PREFIX))
+  const mine = (Array.isArray(existing) ? existing : []).filter(isGroup).filter((g) => !isOwn(g.query))
   return [...mine, ...ours]
 }
 

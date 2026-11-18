@@ -380,6 +380,13 @@ export function renderListNote(boardId: string, list: BHList, boardLink: string,
   return out.join('\n')
 }
 
+/** The board's archive: links up to the board and down to its archived cards, so they stay in the graph. */
+export function renderArchiveNote(boardId: string, boardLink: string, cards: { link: string }[]): string {
+  const out = ['---', `bh_board: ${boardId}`, 'bh_kind: archive', '---', '# Archived cards', '', `Board: ${boardLink}`, '', '## Cards']
+  out.push(...cards.map((c) => `- ${c.link}`), '', '_Kept up to date by the BoardHydra plugin. Restore cards from the board’s archive in BoardHydra._', '')
+  return out.join('\n')
+}
+
 // ---------- checklist notes: card -> checklists -> items -> sub-items (a "dandelion" in the graph) ----------
 
 export interface GraphFile { path: string; text: string }

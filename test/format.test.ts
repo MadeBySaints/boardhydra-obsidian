@@ -218,3 +218,12 @@ test('graph groups: yours are kept first, ours replaced', () => {
   assert.deepEqual(mergeColorGroups([old, mine, 'junk'], ours), [mine, ...ours])
   assert.deepEqual(mergeColorGroups(undefined, []), [])
 })
+
+test('graph groups: note types first, then labels, then plain cards; all of them ours', async () => {
+  const { allColorGroups, KIND_GROUPS, CARD_GROUP } = await import('../src/graph')
+  const all = allColorGroups([{ id: '1', idBoard: 'b', name: 'Bug', color: 'red', pos: 1 }])
+  assert.equal(all[0].query, '[bh_kind:checkitem] [done:true]') // green beats red for finished items
+  assert.deepEqual(all.map((g) => g.query).slice(KIND_GROUPS.length), ['tag:#bh/Bug', CARD_GROUP.query])
+  const mine = { query: 'path:Daily', color: { a: 1, rgb: 1 } }
+  assert.deepEqual(mergeColorGroups([...all, mine], []), [mine])
+})

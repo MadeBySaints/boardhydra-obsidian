@@ -258,7 +258,7 @@ class BoardHydraSettingTab extends PluginSettingTab {
           },
           {
             name: 'Color the graph by label',
-            desc: 'Adds a graph color group for each label (tag:#bh/…) in its BoardHydra color, kept up to date. Your own groups stay and come first. A card with several labels takes the color of its first one in board order.',
+            desc: 'Colors boards, lists, checklists and notes in the graph; checklist items are red until done, then green; cards take their first label’s BoardHydra color. Kept up to date. Your own groups stay and come first.',
             aliases: ['graph', 'colors', 'labels'],
             control: { type: 'toggle', key: 'graphColors', defaultValue: DEFAULTS.graphColors },
           },
