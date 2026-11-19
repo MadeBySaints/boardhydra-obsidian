@@ -1,6 +1,6 @@
 import { App, Notice, TAbstractFile, TFile, TFolder, normalizePath, parseYaml, stringifyYaml } from 'obsidian'
 import { Api, ApiError } from './api'
-import { BoardCtx, Yaml, checklistNotes, linkTarget, noteFileName, noteToPatch, parseCardNote, parseIndex, parseNote, posBetween, renderBoardNote, renderCard, renderCardNote, renderGuideNote, renderIndex, renderArchiveNote, renderListNote, safeName, unlink, wikiLink } from './format'
+import { BoardCtx, LABEL_COLORS, Missing, Yaml, checklistNotes, labelTag, listRequestName, pickLabelColor, linkTarget, noteFileName, noteToPatch, parseCardNote, parseIndex, parseNote, posBetween, renderBoardNote, renderCard, renderCardNote, renderGuideNote, renderIndex, renderArchiveNote, renderListNote, safeName, unlink, wikiLink } from './format'
 import { ColorGroup, allColorGroups, mergeColorGroups, sameGroups, withArchiveFilter } from './graph'
 import type { BHCard, BHEvent, BHLabel, BHList, BHNote, BHSnapshot, CardPatch } from './types'
 
@@ -28,6 +28,7 @@ export interface Settings {
   graphColors: boolean // keep a graph color group per label, in the label's BoardHydra color
   hideArchived: boolean // keep `-path:_archive` in the graph's filter, so archived cards don't show
   guide: boolean // write <board>/_AI guide.md: the server's guide that explains the board to an AI working in the vault
+  createFromNotes: boolean // a new note in Lists/, or a card naming a list or bh/ tag the board lacks, creates that list or label
 }
 
 const yaml: Yaml = { parse: parseYaml, stringify: stringifyYaml }
@@ -75,6 +76,8 @@ export class SyncEngine {
   private pendingNotes = new Set<string>() // note ids with local edits waiting to go up
   private selfDeletes = new Set<string>() // paths we just removed
   private queues = new Map<string, Promise<void>>() // board id → its events, applied one at a time
+  private making = new Map<string, Promise<unknown>>() // "<board>:list|label:<name>" → its create, so one request makes it
+  private refused = new Set<string>() // the same keys, after the server said no (told once, not retried this session)
   private graphTimer = 0
   private me: { id: string; name: string } | null = null
   private stopped = false
@@ -273,6 +276,7 @@ export class SyncEngine {
         if (!st.notes.has(fm.bh_note)) await this.removeLocalNote(fm.bh_note) // deleted in BoardHydra
       }
     }
+    await this.makeRequestedLists(st)
     await this.writeIndex(st) // also writes the card notes
     await this.writeGuide(st).catch((e) => console.warn('BoardHydra: AI guide note', e))
     this.refreshStatus()
@@ -689,6 +693,14 @@ export class SyncEngine {
     return undefined
   }
 
+  private boardForListPath(path: string): BoardState | undefined {
+    for (const st of this.boards.values()) {
+      const dir = normalizePath(`${st.folder}/${LISTS}`)
+      if (path.startsWith(dir + '/') && !path.slice(dir.length + 1).includes('/')) return st
+    }
+    return undefined
+  }
+
   private noteIdForPath(path: string): string | undefined {
     for (const [id, p] of this.notePaths) if (p === path) return id
     return undefined
@@ -722,8 +734,9 @@ export class SyncEngine {
   private schedule(path: string) {
     const idx = this.boardForIndex(path)
     const noteSt = idx ? undefined : this.boardForNotePath(path)
-    const st = idx || noteSt ? undefined : this.boardForPath(path)
-    if (!st && !idx && !noteSt) return
+    const listSt = idx || noteSt ? undefined : this.boardForListPath(path)
+    const st = idx || noteSt || listSt ? undefined : this.boardForPath(path)
+    if (!st && !idx && !noteSt && !listSt) return
     const id = st ? this.idForPath(path) : undefined
     if (id) this.pending.add(id)
     const noteId = noteSt ? this.noteIdForPath(path) : undefined
@@ -732,7 +745,7 @@ export class SyncEngine {
     if (t) window.clearTimeout(t)
     this.timers.set(path, window.setTimeout(() => {
       this.timers.delete(path)
-      const run = idx ? this.pushIndex(idx) : noteSt ? this.pushNote(noteSt, path) : this.push(path)
+      const run = idx ? this.pushIndex(idx) : noteSt ? this.pushNote(noteSt, path) : listSt ? this.pushListNote(listSt, path) : this.push(path)
       run.catch((e) => {
         if (this.handleFatal(e)) return
         new Notice('BoardHydra: ' + (e as Error).message)
@@ -755,7 +768,13 @@ export class SyncEngine {
     if (id && !card) return // not on this board any more (archived or moved); nothing to update
     if (!id && !text.trim()) return // a fresh empty note: wait until it has something
     if (!id && f.basename.startsWith('_')) return // the plugin's own notes (_Kanban) are never cards
-    const { patch, warnings } = noteToPatch(parsed, f.basename, card, this.ctx(st), genId)
+    let result = noteToPatch(parsed, f.basename, card, this.ctx(st), genId)
+    if (this.s().createFromNotes !== false && (result.missing.list || result.missing.labels.length)) {
+      // lists and labels the note names but the board lacks: make them, then read the note again
+      await this.makeMissing(st, result.missing)
+      result = noteToPatch(parsed, f.basename, card, this.ctx(st), genId)
+    }
+    const { patch, warnings } = result
     if (warnings.length) new Notice('BoardHydra: ' + warnings.join(' · '), 8000)
 
     if (!card) {
@@ -893,6 +912,109 @@ export class SyncEngine {
     }
   }
 
+  // ---------- lists and labels made from notes ----------
+
+  /** Creates the lists and labels a card note names that the board lacks (when the setting is on). */
+  private async makeMissing(st: BoardState, missing: Missing) {
+    if (missing.list) await this.ensureList(st, missing.list)
+    for (const l of missing.labels) await this.ensureLabel(st, l.name, l.color)
+  }
+
+  /**
+   * One create per board and name at a time (a list note and its cards often arrive together), and only one try
+   * after the server refuses. Sign-in and plan errors still stop the sync.
+   */
+  private async once<T>(key: string, what: string, make: () => Promise<T>): Promise<T | undefined> {
+    if (this.refused.has(key)) return undefined
+    const running = this.making.get(key) as Promise<T | undefined> | undefined
+    if (running) return running
+    const job = make().catch((e: unknown) => {
+      if (e instanceof ApiError && (e.status === 401 || e.status === 402)) throw e
+      this.refused.add(key)
+      new Notice(`BoardHydra: couldn’t create ${what} — ${(e as Error).message}`, 8000)
+      return undefined
+    }).finally(() => this.making.delete(key))
+    this.making.set(key, job)
+    return job
+  }
+
+  /** The open list with this name (any case), created at the end of the board if there isn't one. */
+  private async ensureList(st: BoardState, name: string): Promise<BHList | undefined> {
+    const find = () => st.snap.lists.find((l) => !l.closed && l.name.toLowerCase() === name.toLowerCase())
+    const have = find()
+    if (have) return have
+    return this.once(`${st.id}:list:${name.toLowerCase()}`, `the list “${name}”`, async () => {
+      const again = find()
+      if (again) return again
+      const l = await this.api.createList(st.id, name)
+      // our own event is skipped (its origin is us), so add the list here
+      st.snap.lists = [...st.snap.lists.filter((x) => x.id !== l.id), l]
+      this.scheduleIndex(st)
+      new Notice(`BoardHydra: added the list “${l.name}”.`)
+      return l
+    })
+  }
+
+  /** The label whose tag matches this name's, created (in `color`, or a free one the board doesn't use) if missing. */
+  private async ensureLabel(st: BoardState, name: string, color?: string): Promise<BHLabel | undefined> {
+    const tag = labelTag({ name } as BHLabel).toLowerCase()
+    const find = () => st.snap.labels.find((l) => labelTag(l).toLowerCase() === tag)
+    const have = find()
+    if (have) return have
+    return this.once(`${st.id}:label:${tag}`, `the label “${name}”`, async () => {
+      const again = find()
+      if (again) return again
+      let c = color
+      if (c && !LABEL_COLORS.includes(c)) {
+        new Notice(`BoardHydra: “${c}” isn’t a label color anyone can use; the label “${name}” gets another one.`, 8000)
+        c = undefined
+      }
+      const l = await this.api.createLabel(st.id, name, c ?? pickLabelColor(st.snap.labels))
+      st.snap.labels = [...st.snap.labels.filter((x) => x.id !== l.id), l]
+      this.scheduleGraph()
+      new Notice(`BoardHydra: added the label “${l.name}”.`)
+      return l
+    })
+  }
+
+  /** A note in <board>/Lists/ that isn't one of ours asks for a list: make it, then the note becomes its list note. */
+  private async pushListNote(st: BoardState, path: string) {
+    if (this.s().createFromNotes === false) return
+    const f = this.app.vault.getAbstractFileByPath(path)
+    if (f instanceof TFile) await this.makeRequestedList(st, f)
+  }
+
+  private async makeRequestedList(st: BoardState, f: TFile) {
+    if (f.extension !== 'md') return
+    const name = listRequestName(await this.app.vault.read(f), f.basename, yaml)
+    if (!name) return
+    const list = await this.ensureList(st, name)
+    if (!list) return
+    // the list note is written at the list's own path; a request note anywhere else is no longer needed
+    const target = this.listPaths(st).get(list.id)
+    if (target && target !== f.path && this.app.vault.getAbstractFileByPath(f.path)) {
+      this.selfDeletes.add(f.path)
+      await this.app.fileManager.trashFile(f)
+    }
+    this.scheduleIndex(st)
+  }
+
+  /** Request notes already in Lists/ when the board loads (written while Obsidian was closed). */
+  private async makeRequestedLists(st: BoardState) {
+    if (this.s().createFromNotes === false) return
+    const dir = this.app.vault.getAbstractFileByPath(normalizePath(`${st.folder}/${LISTS}`))
+    if (!(dir instanceof TFolder)) return
+    for (const f of [...dir.children]) {
+      if (!(f instanceof TFile)) continue
+      try {
+        await this.makeRequestedList(st, f)
+      } catch (e) {
+        if (e instanceof ApiError && (e.status === 401 || e.status === 402)) throw e // the caller stops the sync
+        console.warn('BoardHydra: list request note', f.path, e)
+      }
+    }
+  }
+
   onLocalRename(f: TAbstractFile, oldPath: string) {
     if (!(f instanceof TFile)) return
     if (this.selfMoves.delete(f.path)) return
@@ -900,7 +1022,7 @@ export class SyncEngine {
     if (nid) { this.notePaths.set(nid, f.path); return }
     const id = this.idForPath(oldPath)
     if (id) this.pathById.set(id, f.path)
-    if (this.boardForPath(f.path)) this.schedule(f.path)
+    if (this.boardForPath(f.path) || this.boardForListPath(f.path)) this.schedule(f.path)
     else if (id && f.path.includes(`/${ARCHIVE}/`)) this.archiveRemote(id)
   }
 

@@ -12,6 +12,7 @@
 //   start: 2026-11-20T15:00:00Z
 //   due: 2026-11-21T17:00:00Z
 //   done: false
+//   new_labels: [{ name: High priority, color: orange }]   (optional: name and color for a bh/ tag the board lacks)
 //   ---
 //   <description>
 //
@@ -42,7 +43,17 @@ export const TAG_PREFIX = 'bh/'
 
 /** Frontmatter keys the plugin writes; everything else in a note's frontmatter is the user's and is kept. */
 // `archived` is set on notes in _archive/; a live card's note drops it (the card was restored)
-const OWN_KEYS = new Set(['bh_id', 'bh_board', 'bh_updated', 'name', 'list', 'labels', 'tags', 'members', 'start', 'due', 'done', 'archived'])
+// `new_labels` only asks for labels to be made; it's dropped once they exist
+const OWN_KEYS = new Set(['bh_id', 'bh_board', 'bh_updated', 'name', 'list', 'labels', 'tags', 'members', 'start', 'due', 'done', 'archived', 'new_labels'])
+
+/** Label colors anyone can use (the others are unlocked in BoardHydra's Shop). */
+export const LABEL_COLORS = ['green', 'yellow', 'orange', 'red', 'purple', 'blue', 'sky', 'lime', 'pink', 'black']
+
+/** A color for a new label: the first free one the board doesn't use yet, else the next in turn. */
+export function pickLabelColor(labels: BHLabel[]): string {
+  const used = new Set(labels.map((l) => l.color))
+  return LABEL_COLORS.find((c) => !used.has(c)) ?? LABEL_COLORS[labels.length % LABEL_COLORS.length]
+}
 
 const CHECKLIST = '## Checklist: '
 const LINKS = '## Links'
@@ -247,7 +258,32 @@ function normChecklists(cls: BHChecklist[] | null): unknown {
   }))
 }
 
-export interface PatchResult { patch: CardPatch; warnings: string[] }
+/** A label a note asks for that the board doesn't have yet. */
+export interface WantedLabel { name: string; color?: string }
+
+/** Lists and labels a note names that the board lacks (the sync can create them, then build the patch again). */
+export interface Missing { list?: string; labels: WantedLabel[] }
+
+export interface PatchResult { patch: CardPatch; warnings: string[]; missing: Missing }
+
+/** `new_labels:` as name → color: a list of { name, color } (or plain names), or a map name: color. */
+export function newLabels(v: unknown): WantedLabel[] {
+  const out: WantedLabel[] = []
+  const add = (name: unknown, color: unknown) => {
+    if (typeof name !== 'string' && typeof name !== 'number') return
+    const n = String(name).trim()
+    if (n) out.push(typeof color === 'string' && color.trim() ? { name: n, color: color.trim().toLowerCase() } : { name: n })
+  }
+  if (Array.isArray(v)) {
+    for (const x of v) {
+      if (x && typeof x === 'object' && !Array.isArray(x)) add((x as Record<string, unknown>).name, (x as Record<string, unknown>).color)
+      else add(x, undefined)
+    }
+  } else if (v && typeof v === 'object') {
+    for (const [k, c] of Object.entries(v as Record<string, unknown>)) add(k, c)
+  }
+  return out
+}
 
 /**
  * What to send so the server card matches the note. With card = null (a new note) every field is set.
@@ -256,7 +292,9 @@ export interface PatchResult { patch: CardPatch; warnings: string[] }
 export function noteToPatch(parsed: ParsedNote, basename: string, card: BHCard | null, ctx: BoardCtx, genId: GenId): PatchResult {
   const p: CardPatch = {}
   const warnings: string[] = []
+  const missing: Missing = { labels: [] }
   const fm = parsed.fm
+  const wanted = newLabels(fm.new_labels)
 
   const name = noteName(parsed, basename)
   if (!card || name !== card.name) p.name = name
@@ -268,7 +306,7 @@ export function noteToPatch(parsed: ParsedNote, basename: string, card: BHCard |
   if (listName) {
     const open = ctx.lists.filter((l) => !l.closed)
     const l = open.find((x) => x.name === listName) ?? open.find((x) => lc(x.name) === lc(listName))
-    if (!l) warnings.push(`No list named “${listName}” on this board`)
+    if (!l) { warnings.push(`No list named “${listName}” on this board`); missing.list = listName }
     else if (!card || l.id !== card.idList) p.idList = l.id
   }
 
@@ -278,11 +316,19 @@ export function noteToPatch(parsed: ParsedNote, basename: string, card: BHCard |
     const tagged = asList(fm.tags).map((t) => t.replace(/^#/, '')).filter((t) => t.startsWith(TAG_PREFIX))
     for (const t of tagged) {
       const l = ctx.labels.find((x) => labelTag(x) === t) ?? ctx.labels.find((x) => lc(labelTag(x)) === lc(t))
-      if (l) { if (!ids.includes(l.id)) ids.push(l.id) } else warnings.push(`No label for #${t} on this board`)
+      if (l) { if (!ids.includes(l.id)) ids.push(l.id); continue }
+      warnings.push(`No label for #${t} on this board`)
+      // the label's name: from new_labels if one turns into this tag, else the tag itself
+      const w = wanted.find((x) => lc(labelTag({ name: x.name } as BHLabel)) === lc(t))
+      const name = w?.name ?? t.slice(TAG_PREFIX.length)
+      if (!missing.labels.some((x) => lc(x.name) === lc(name))) missing.labels.push(w ?? { name })
     }
     for (const n of asList(fm.labels)) {
       const l = ctx.labels.find((x) => labelName(x) === n) ?? ctx.labels.find((x) => lc(labelName(x)) === lc(n))
-      if (l) { if (!ids.includes(l.id)) ids.push(l.id) } else warnings.push(`No label named “${n}” on this board`)
+      if (l) { if (!ids.includes(l.id)) ids.push(l.id); continue }
+      warnings.push(`No label named “${n}” on this board`)
+      const w = wanted.find((x) => lc(x.name) === lc(n))
+      if (!missing.labels.some((x) => lc(x.name) === lc(n))) missing.labels.push(w ?? { name: n })
     }
     if (!card || !eq([...ids].sort(), [...card.idLabels].sort())) p.idLabels = ids
   }
@@ -322,7 +368,7 @@ export function noteToPatch(parsed: ParsedNote, basename: string, card: BHCard |
   const norm = (ls: BHLink[]) => ls.map((l) => ({ url: l.url, title: l.title && l.title !== l.url ? l.title : '' }))
   if (!card ? links.length > 0 : !eq(norm(links), norm(oldLinks))) p.links = links
 
-  return { patch: p, warnings }
+  return { patch: p, warnings, missing }
 }
 
 // ---------- notes on cards: one Obsidian note per BoardHydra note ----------
@@ -379,6 +425,19 @@ export function renderGuideNote(boardId: string, boardLink: string, guide: strin
   const out = ['---', `bh_board: ${boardId}`, 'bh_kind: guide', '---', `Board: ${boardLink}`, '', guide.trim(), '',
     '_Kept up to date by the BoardHydra plugin (every few hours). Edits here are replaced._', '']
   return out.join('\n')
+}
+
+/**
+ * A note someone put in a board's Lists/ folder asking for a new list: the list's name, or null when the note isn't
+ * a request (one of the plugin's own list notes, an empty note, a `_` note, or Obsidian's fresh "Untitled" note).
+ * The name is the `name:` property if there is one, else the file name.
+ */
+export function listRequestName(text: string, basename: string, yaml: Yaml): string | null {
+  if (!text.trim() || basename.startsWith('_') || /^Untitled( \d+)?$/.test(basename)) return null
+  const { fm } = parseNote(text, yaml)
+  if (fm.bh_list !== undefined || fm.bh_kind !== undefined || fm.bh_id !== undefined) return null
+  const name = (typeof fm.name === 'string' || typeof fm.name === 'number' ? String(fm.name) : '').trim() || basename.trim()
+  return name ? name.slice(0, 200) : null
 }
 
 /** A list's note: links up to its board and down to its cards, in order. */

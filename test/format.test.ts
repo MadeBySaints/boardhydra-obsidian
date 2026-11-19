@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
 import { parse, stringify } from 'yaml'
-import { checklistNotes, labelTag, noteToPatch, parseIndex, parseNote, posBetween, renderBoardNote, renderCard, renderGuideNote, renderIndex, renderListNote, safeName, unlink } from '../src/format'
+import { LABEL_COLORS, checklistNotes, labelTag, listRequestName, newLabels, noteToPatch, pickLabelColor, parseIndex, parseNote, posBetween, renderBoardNote, renderCard, renderGuideNote, renderIndex, renderListNote, safeName, unlink } from '../src/format'
 import type { BHCard } from '../src/types'
 
 const yaml = { parse: (s: string) => parse(s), stringify: (o: any) => stringify(o) }
@@ -259,4 +259,47 @@ test('withArchiveFilter adds or removes only our term and keeps the rest of the 
   assert.equal(withArchiveFilter('-path:_archive tag:#work', false), 'tag:#work')
   assert.equal(withArchiveFilter('-path:_archived', false), '-path:_archived')
   assert.equal(withArchiveFilter('"two  spaces"', false), '"two  spaces"')
+})
+
+test('a list or label the board lacks is reported as missing, so the sync can make it', () => {
+  const text = '---\nlist: "[[B/Lists/Blocked|Blocked]]"\ntags: [bh/Bug, bh/Urgent, bh/High-priority, mine]\n---\nx\n'
+  const { patch, missing, warnings } = noteToPatch(parseNote(text, yaml), 'New card', null, ctx, genId)
+  assert.equal(missing.list, 'Blocked')
+  assert.deepEqual(missing.labels, [{ name: 'Urgent' }])
+  assert.deepEqual(patch.idLabels, ['g', 'h'])
+  assert.equal(warnings.length, 2)
+  const ok = noteToPatch(parseNote('---\nlist: To do\ntags: [bh/Bug]\n---\n', yaml), 'C', null, ctx, genId)
+  assert.deepEqual(ok.missing, { labels: [] })
+})
+
+test('new_labels gives a missing label its name and color; the tag still matches it', () => {
+  const text = '---\ntags: [bh/Needs-review]\nnew_labels:\n  - { name: Needs review, color: Sky }\n  - Unused\n---\n'
+  const { missing } = noteToPatch(parseNote(text, yaml), 'C', null, ctx, genId)
+  assert.deepEqual(missing.labels, [{ name: 'Needs review', color: 'sky' }])
+  assert.equal(labelTag({ id: 'x', idBoard: 'b', name: 'Needs review', color: 'sky', pos: 1 }), 'bh/Needs-review')
+  assert.deepEqual(newLabels({ 'A b': 'red', C: null }), [{ name: 'A b', color: 'red' }, { name: 'C' }])
+  assert.deepEqual(newLabels(undefined), [])
+})
+
+test('new_labels is dropped when the card note is written again', () => {
+  const text = renderCard(card, ctx, yaml, { new_labels: [{ name: 'X', color: 'red' }], mood: 'happy' })
+  assert.doesNotMatch(text, /new_labels/)
+  assert.match(text, /mood: happy/)
+})
+
+test('a new label gets a free color the board doesn’t use yet', () => {
+  assert.equal(pickLabelColor([]), 'green')
+  assert.equal(pickLabelColor(ctx.labels), 'green')
+  const all = LABEL_COLORS.map((c, i) => ({ id: c, idBoard: 'b', name: c, color: c, pos: i }))
+  assert.equal(pickLabelColor(all), 'green')
+  assert.equal(pickLabelColor(all.slice(0, 3)), 'red')
+})
+
+test('which notes in Lists/ ask for a new list', () => {
+  assert.equal(listRequestName('# Review\n', 'Review', yaml), 'Review')
+  assert.equal(listRequestName('---\nname: "Q3: plans"\n---\n', 'Q3- plans', yaml), 'Q3: plans')
+  assert.equal(listRequestName('', 'Review', yaml), null)
+  assert.equal(listRequestName('x', 'Untitled 2', yaml), null)
+  assert.equal(listRequestName('x', '_mine', yaml), null)
+  assert.equal(listRequestName(renderListNote('b', ctx.lists[0], '[[B]]', []), 'To do', yaml), null)
 })

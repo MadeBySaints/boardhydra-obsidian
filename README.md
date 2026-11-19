@@ -84,7 +84,22 @@ The description, in Markdown.
 - **Changes in BoardHydra** show up live.
 - **Both changed at once**: the note shows the BoardHydra version, and yours is saved in `_conflicts/`.
 
-Lists, labels and members are made in BoardHydra. A name in the note that doesn't exist on the board is skipped, with a notice.
+- **New lists and labels** come from notes too:
+  - A new note in `Lists/` makes a list with the note's name (or its `name:` property). The note then becomes the
+    list's note.
+  - A card whose `list:` names a list the board doesn't have makes that list.
+  - A card tagged `bh/…` with a label the board doesn't have makes that label, in a color the board isn't using yet.
+    To choose the label's exact name and color, add `new_labels:` to the card:
+    ```yaml
+    tags: [bh/Needs-review]
+    new_labels:
+      - { name: Needs review, color: sky }
+    ```
+    Colors: green, yellow, orange, red, purple, blue, sky, lime, pink, black.
+  - Turn this off with **Create lists and labels from notes** in the settings; then unknown lists and labels are
+    skipped, with a notice. Making them needs permission to manage lists and labels on the board.
+
+Members are added in BoardHydra. A member name in the note that isn't on the board is skipped, with a notice.
 
 ## Tidy up a board with AI
 [prompt.md](prompt.md) is a ready-made prompt for Claude, Codex, Gemini or another AI. It turns a messy board into a
