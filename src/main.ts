@@ -18,6 +18,7 @@ const DEFAULTS: Settings = {
   graphColors: true,
   hideArchived: true,
   guide: true,
+  createFromNotes: true,
 }
 
 export default class BoardHydraPlugin extends Plugin {
@@ -152,7 +153,7 @@ class BoardHydraSettingTab extends PluginSettingTab {
     const s = p.settings
     if (key === 'root') s.root = String(value).trim() || DEFAULTS.root
     else if (key === 'server') s.server = String(value).trim() || DEFAULTS.server
-    else if (key === 'kanban' || key === 'checklists' || key === 'graphColors' || key === 'hideArchived' || key === 'guide') s[key] = value === true
+    else if (key === 'kanban' || key === 'checklists' || key === 'graphColors' || key === 'hideArchived' || key === 'guide' || key === 'createFromNotes') s[key] = value === true
     else return
     await p.saveSettings()
     if (key === 'kanban' || key === 'checklists' || key === 'guide') await p.engine.restart()
@@ -252,6 +253,12 @@ class BoardHydraSettingTab extends PluginSettingTab {
             name: 'Kanban note',
             desc: 'Also write a _Kanban note per board for the Kanban plugin, where dragging a card moves it. It links to every card, so the graph gets busier.',
             control: { type: 'toggle', key: 'kanban', defaultValue: DEFAULTS.kanban },
+          },
+          {
+            name: 'Create lists and labels from notes',
+            desc: 'A new note in a board’s Lists folder makes that list. A card whose list or bh/ tag the board lacks makes the list or label (a card’s new_labels property can give a label’s name and color). Off: they’re skipped, with a notice.',
+            aliases: ['lists', 'labels', 'create', 'ai'],
+            control: { type: 'toggle', key: 'createFromNotes', defaultValue: DEFAULTS.createFromNotes },
           },
           {
             name: 'AI guide note',

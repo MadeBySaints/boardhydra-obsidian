@@ -57,7 +57,9 @@ HOW THE NOTES WORK (follow this exactly, or the sync breaks)
 - The "list:" property says which list the card is in. Use the same link format the note already uses,
   pointing at the list's note in the "Lists" folder.
 - Labels are tags that start with "bh/" (spaces become "-": "High priority" is "bh/High-priority").
-  A label must already exist on the board in BoardHydra. Tags without "bh/" are mine; leave them alone.
+  A "bh/" tag the board doesn't have yet becomes a new label. To give it a proper name and color, add
+  "new_labels:" to the card, e.g.  new_labels: [{ name: High priority, color: orange }]
+  (colors: green, yellow, orange, red, purple, blue, sky, lime, pink, black). Tags without "bh/" are mine; leave them alone.
 - The text under the properties is the card's description.
 - Checklists live in the card note, as a heading plus checkbox lines. Indent a line by two spaces to make it a
   sub-item (one level deep only):
@@ -67,9 +69,10 @@ HOW THE NOTES WORK (follow this exactly, or the sync breaks)
 - A new note in the board folder, with a "list:" property, becomes a new card.
 - Moving a card note into the "_archive" folder archives the card. Nothing is ever deleted.
 - Never change bh_id, bh_board or bh_updated.
-- Never edit these, because the plugin writes them: the board's own note, anything in "Lists", "Checklists" or "Notes",
-  and "_archive/Archived cards".
-- Lists and labels can't be created from Obsidian. When I need new ones, tell me and I'll make them in BoardHydra.
+- Never edit these, because the plugin writes them: the board's own note, the notes already in "Lists", anything in
+  "Checklists" or "Notes", and "_archive/Archived cards".
+- To add a list, create a new note in "Lists" named after it (e.g. "Lists/Review.md" with a "# Review" line). The
+  plugin makes the list and turns the note into the list's note. A card whose "list:" names a new list makes it too.
 
 THE STRUCTURE I WANT
 1. Lists show where the work is, from left to right:
@@ -93,9 +96,10 @@ THE STRUCTURE I WANT
 HOW TO WORK
 Step 1: Read every card note. Then show me your plan as a table:
         old name → new name, list, labels, and checklists (with their items).
-        Underneath, list the new lists and labels I need to create in BoardHydra, and which cards you'd archive.
+        Underneath, list the new lists and labels you'll create, and which cards you'd archive.
         Then stop and wait for my OK. Change the plan if I ask.
-Step 2: Once I say the lists and labels exist, change the notes one card at a time. Rename the file, then update
+Step 2: Once I say OK, add the new lists first (a note each in "Lists"), then change the notes one card at a
+        time. Rename the file, then update
         the properties, description and checklists. Leave a couple of seconds between notes so each change can sync.
 Step 3: When you're done, tell me in a few lines what changed. If any note couldn't be changed, say which and why.
 ```
@@ -105,7 +109,8 @@ Step 3: When you're done, tell me in a few lines what changed. If any note could
 - **Start small.** If your board is big, ask the AI to do one list first, and check the result in BoardHydra.
 - **Changed your mind?** Archived cards can be restored from the board's archive in BoardHydra. A rename can be
   undone by renaming the note back.
-- **A tag didn't stick?** The plugin shows a notice when a label doesn't exist on the board. Create the label in
-  BoardHydra, then save the note again.
+- **A tag didn't stick?** The plugin makes missing labels itself, unless **Create lists and labels from notes** is
+  off or you can't manage labels on the board; then it shows a notice. Create the label in BoardHydra and save the
+  note again.
 - **Reading the colors:** each card takes the color of its first label, in the order labels appear in BoardHydra.
   Drag labels in BoardHydra to choose which one wins.

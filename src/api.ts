@@ -1,5 +1,5 @@
 import { requestUrl } from 'obsidian'
-import type { BHBoard, BHCard, BHEvent, BHNote, BHSnapshot, CardPatch } from './types'
+import type { BHBoard, BHCard, BHEvent, BHLabel, BHList, BHNote, BHSnapshot, CardPatch } from './types'
 
 export class ApiError extends Error {
   constructor(public status: number, message: string, public body?: unknown) {
@@ -69,6 +69,8 @@ export class Api {
   snapshot(id: string) { return this.req<BHSnapshot>('GET', `/boards/${encodeURIComponent(id)}`) }
   createCard(boardId: string, p: CardPatch & { idList: string; name: string }) { return this.req<BHCard>('POST', `/boards/${encodeURIComponent(boardId)}/cards`, p) }
   updateCard(id: string, p: CardPatch) { return this.req<BHCard>('PATCH', `/cards/${encodeURIComponent(id)}`, p) }
+  createList(boardId: string, name: string) { return this.req<BHList>('POST', `/boards/${encodeURIComponent(boardId)}/lists`, { name }) }
+  createLabel(boardId: string, name: string, color?: string) { return this.req<BHLabel>('POST', `/boards/${encodeURIComponent(boardId)}/labels`, color ? { name, color } : { name }) }
   createNote(cardId: string, body: string) { return this.req<BHNote>('POST', `/cards/${encodeURIComponent(cardId)}/notes`, { body }) }
   updateNote(id: string, body: string) { return this.req<BHNote>('PATCH', `/notes/${encodeURIComponent(id)}`, { body }) }
   deleteNote(id: string) { return this.req<{ ok: boolean }>('DELETE', `/notes/${encodeURIComponent(id)}`) }
