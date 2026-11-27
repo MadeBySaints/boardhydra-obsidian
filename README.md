@@ -47,6 +47,7 @@ members: ["[[Sam Lee]]"]
 start: 
 due: 2026-11-21T17:00:00Z
 done: false
+pinned: true            # only on a pinned card
 ---
 The description, in Markdown.
 
@@ -78,11 +79,24 @@ The description, in Markdown.
   checklists in the card note) and have `done: true` once ticked, so a graph group like `[done:true]` can color
   finished items. Turn them off under **Checklist notes** in settings.
 - **New note in a board folder**: a new card in the `list:` you give (or the first list).
-- **Delete a note**: the card is archived in BoardHydra, never deleted. Restore it from the board's archive.
+- **Delete a note** (or move it to `_archive/`): the card is archived in BoardHydra, never deleted. Restore it from
+  the board's archive. A pinned card is asked about first.
 - **Archived cards** move to `_archive/` with `archived: true`, linked from the board's `Archived cards` note, so they
   leave their list but stay connected in the graph.
 - **Changes in BoardHydra** show up live.
 - **Both changed at once**: the note shows the BoardHydra version, and yours is saved in `_conflicts/`.
+- **A change BoardHydra refuses** (your permissions don't allow it, the card is pinned, it's still waiting for
+  sign-offs, or the board has no pin left) is undone in the note, with a notice saying why. The rest of your edit is
+  still saved. If a name, description, checklist or link was refused, your version is saved in `_conflicts/`.
+
+- **Pinned cards** stay at the top of their list, in the list note and the Kanban note:
+  - Add `pinned: true` to pin a card, and set `pinned: false` to unpin it. Removing the line changes nothing.
+  - A pinned card can't move to another list until it's unpinned. You can unpin and change `list:` in the same edit.
+  - Deleting or archiving its note asks **Archive** or **Keep**. Archiving removes the pin.
+  - How many cards a board can pin depends on the plan of whoever owns it: Free 1, Pro one for each team member,
+    Business unlimited. Pinning, unpinning and archiving a pinned card need permission to pin on the board.
+  - The `pinned` property belongs to the plugin. If you used a property with that name for something else, the plugin
+    takes it over.
 
 - **New lists and labels** come from notes too:
   - A new note in `Lists/` makes a list with the note's name (or its `name:` property). The note then becomes the

@@ -12,6 +12,7 @@
 //   start: 2026-11-20T15:00:00Z
 //   due: 2026-11-21T17:00:00Z
 //   done: false
+//   pinned: true                (only on a pinned card, which stays at the top of its list; `pinned: false` unpins it)
 //   new_labels: [{ name: High priority, color: orange }]   (optional: name and color for a bh/ tag the board lacks)
 //   ---
 //   <description>
@@ -44,7 +45,7 @@ export const TAG_PREFIX = 'bh/'
 /** Frontmatter keys the plugin writes; everything else in a note's frontmatter is the user's and is kept. */
 // `archived` is set on notes in _archive/; a live card's note drops it (the card was restored)
 // `new_labels` only asks for labels to be made; it's dropped once they exist
-const OWN_KEYS = new Set(['bh_id', 'bh_board', 'bh_updated', 'name', 'list', 'labels', 'tags', 'members', 'start', 'due', 'done', 'archived', 'new_labels'])
+const OWN_KEYS = new Set(['bh_id', 'bh_board', 'bh_updated', 'name', 'list', 'labels', 'tags', 'members', 'start', 'due', 'done', 'pinned', 'archived', 'new_labels'])
 
 /** Label colors anyone can use (the others are unlocked in BoardHydra's Shop). */
 export const LABEL_COLORS = ['green', 'yellow', 'orange', 'red', 'purple', 'blue', 'sky', 'lime', 'pink', 'black']
@@ -121,6 +122,7 @@ export function renderCard(c: BHCard, ctx: BoardCtx, yaml: Yaml, existing: Recor
   fm.start = c.start ?? ''
   fm.due = c.due ?? ''
   fm.done = c.dueComplete
+  if (c.pinned) fm.pinned = true
   for (const [k, v] of Object.entries(existing)) if (!OWN_KEYS.has(k)) fm[k] = v
   const parts: string[] = [`---\n${yaml.stringify(fm).trimEnd()}\n---\n`]
   const desc = (c.desc ?? '').trim()
@@ -212,6 +214,12 @@ function sameDate(a: string | null, b: string | null): boolean {
   return !Number.isNaN(x) && x === y
 }
 
+function asBool(v: unknown): boolean | undefined {
+  if (v === true || v === 'true') return true
+  if (v === false || v === 'false') return false
+  return undefined
+}
+
 const eq = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 const lc = (s: string) => s.toLowerCase()
 
@@ -266,6 +274,8 @@ export interface Missing { list?: string; labels: WantedLabel[] }
 
 export interface PatchResult { patch: CardPatch; warnings: string[]; missing: Missing }
 
+const noList = (name: string) => `No list named “${name}” on this board`
+
 /** `new_labels:` as name → color: a list of { name, color } (or plain names), or a map name: color. */
 export function newLabels(v: unknown): WantedLabel[] {
   const out: WantedLabel[] = []
@@ -306,7 +316,7 @@ export function noteToPatch(parsed: ParsedNote, basename: string, card: BHCard |
   if (listName) {
     const open = ctx.lists.filter((l) => !l.closed)
     const l = open.find((x) => x.name === listName) ?? open.find((x) => lc(x.name) === lc(listName))
-    if (!l) { warnings.push(`No list named “${listName}” on this board`); missing.list = listName }
+    if (!l) { warnings.push(noList(listName)); missing.list = listName }
     else if (!card || l.id !== card.idList) p.idList = l.id
   }
 
@@ -356,6 +366,10 @@ export function noteToPatch(parsed: ParsedNote, basename: string, card: BHCard |
     if (!card || v !== card.dueComplete) p.dueComplete = v
   }
 
+  // only an explicit true or false counts: a note without the property says nothing about the pin
+  const pin = asBool(fm.pinned)
+  if (pin !== undefined && pin !== !!card?.pinned) p.pinned = pin
+
   const cls = toChecklists(parsed.checklists, card, genId)
   if (!card ? cls.length > 0 : !eq(normChecklists(cls), normChecklists(card.checklists))) p.checklists = cls
 
@@ -369,6 +383,41 @@ export function noteToPatch(parsed: ParsedNote, basename: string, card: BHCard |
   if (!card ? links.length > 0 : !eq(norm(links), norm(oldLinks))) p.links = links
 
   return { patch: p, warnings, missing }
+}
+
+// ---------- pinned cards ----------
+
+/** The order of cards in a list: pinned ones first, then by position. */
+export function cardOrder(a: BHCard, b: BHCard): number {
+  return Number(!!b.pinned) - Number(!!a.pinned) || a.pos - b.pos
+}
+
+/**
+ * A patch cut into the parts the server can refuse on their own, in the order to send them: the card's content,
+ * the done tick, the move (with an unpin, which has to travel with it), then a new pin, which counts in the new list.
+ */
+export function splitPatch(patch: CardPatch): CardPatch[] {
+  const groups: CardPatch[] = [{}, {}, {}, {}]
+  for (const [k, v] of Object.entries(patch) as [string, unknown][]) {
+    if (k === 'ifUpdatedAt' || v === undefined) continue
+    const i = k === 'dueComplete' ? 1 : k === 'idList' || k === 'pos' || (k === 'pinned' && v === false) ? 2 : k === 'pinned' ? 3 : 0
+    Object.assign(groups[i], { [k]: v })
+  }
+  return groups.filter((g) => Object.keys(g).length)
+}
+
+/**
+ * A pinned card stays in its list: unless the note also unpins it, the move is taken out of the patch, and a list
+ * the board lacks isn't asked for. `held` says that happened.
+ */
+export function holdPinned(r: PatchResult, card: BHCard | null): PatchResult & { held: boolean } {
+  const newList = r.missing.list
+  if (!card?.pinned || r.patch.pinned === false || (r.patch.idList === undefined && !newList)) return { ...r, held: false }
+  const patch = { ...r.patch }
+  delete patch.idList
+  delete patch.pos
+  const warnings = newList ? r.warnings.filter((w) => w !== noList(newList)) : r.warnings
+  return { patch, warnings, missing: { labels: r.missing.labels }, held: true }
 }
 
 // ---------- notes on cards: one Obsidian note per BoardHydra note ----------
@@ -515,7 +564,7 @@ export function renderIndex(boardId: string, lists: BHList[], cards: BHCard[], p
   const out = ['---', '', 'kanban-plugin: board', `bh_board: ${boardId}`, '', '---', '']
   for (const l of [...lists].filter((x) => !x.closed).sort((a, b) => a.pos - b.pos)) {
     out.push(`## ${l.name}`, '')
-    for (const c of cards.filter((x) => x.idList === l.id && !x.closed).sort((a, b) => a.pos - b.pos)) {
+    for (const c of cards.filter((x) => x.idList === l.id && !x.closed).sort(cardOrder)) {
       out.push(`- [${c.dueComplete ? 'x' : ' '}] [[${pathOf(c)}|${c.name.replace(/[[\]|]/g, '')}]]`)
     }
     out.push('', '')
@@ -537,6 +586,53 @@ export function parseIndex(text: string): { list: string; targets: string[] }[] 
     }
     const m = /^\s*[-*] \[[ xX]\] .*?\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/.exec(line)
     if (m && out.length) out[out.length - 1].targets.push(m[1].trim())
+  }
+  return out
+}
+
+export interface IndexMoves {
+  moves: { id: string; patch: CardPatch }[]
+  held: string[] // names of pinned cards dragged to another list: they stay where they are
+}
+
+/**
+ * What the Kanban note asks for. `cards` and `checked` are keyed by the link target a card has in the note.
+ * Pinned and unpinned cards are ordered as two separate groups, as in BoardHydra: pins show first whatever their
+ * position, so comparing across the groups would rewrite positions on every edit.
+ */
+export function planIndexMoves(lists: BHList[], sections: { list: string; targets: string[] }[], cards: Map<string, BHCard>, checked: Map<string, boolean>): IndexMoves {
+  const out: IndexMoves = { moves: [], held: [] }
+  const open = lists.filter((l) => !l.closed)
+  for (const sec of sections) {
+    const list = open.find((l) => l.name === sec.list)
+    if (!list) continue // new lists are made in BoardHydra
+    const seq = sec.targets.map((t) => ({ t, c: cards.get(t) })).filter((x): x is { t: string; c: BHCard } => !!x.c)
+    const tick = (t: string, c: BHCard): CardPatch => {
+      const done = checked.get(t)
+      return done !== undefined && done !== c.dueComplete ? { dueComplete: done } : {}
+    }
+    const held = (c: BHCard) => !!c.pinned && c.idList !== list.id
+    for (const { t, c } of seq.filter((x) => held(x.c))) {
+      out.held.push(c.name)
+      const patch = tick(t, c)
+      if (Object.keys(patch).length) out.moves.push({ id: c.id, patch })
+    }
+    for (const pinned of [true, false]) {
+      const group = seq.filter((x) => !!x.c.pinned === pinned && !held(x.c))
+      let prev: number | undefined
+      for (let i = 0; i < group.length; i++) {
+        const { t, c } = group[i]
+        let next: number | undefined
+        for (let j = i + 1; j < group.length; j++) {
+          const n = group[j].c
+          if (n.idList === list.id && (prev === undefined || n.pos > prev)) { next = n.pos; break }
+        }
+        const inPlace = c.idList === list.id && (prev === undefined || c.pos > prev) && (next === undefined || c.pos < next)
+        const patch: CardPatch = inPlace ? tick(t, c) : { idList: list.id, pos: posBetween(prev, next), ...tick(t, c) }
+        if (Object.keys(patch).length) out.moves.push({ id: c.id, patch })
+        prev = patch.pos ?? c.pos
+      }
+    }
   }
   return out
 }

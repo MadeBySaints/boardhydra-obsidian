@@ -69,6 +69,8 @@ HOW THE NOTES WORK (follow this exactly, or the sync breaks)
 - A new note in the board folder, with a "list:" property, becomes a new card.
 - Moving a card note into the "_archive" folder archives the card. Nothing is ever deleted.
 - Never change bh_id, bh_board or bh_updated.
+- A card with "pinned: true" is held in its list: don't move or archive it, and don't add or change "pinned" unless
+  I ask.
 - Never edit these, because the plugin writes them: the board's own note, the notes already in "Lists", anything in
   "Checklists" or "Notes", and "_archive/Archived cards".
 - To add a list, create a new note in "Lists" named after it (e.g. "Lists/Review.md" with a "# Review" line). The

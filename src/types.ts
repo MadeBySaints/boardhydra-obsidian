@@ -28,6 +28,7 @@ export interface BHCard {
   desc: string
   pos: number
   closed: boolean
+  pinned?: boolean // held at the top of its list: it can't move to another one until unpinned
   idLabels: string[]
   idMembers: string[]
   start: string | null
@@ -68,6 +69,7 @@ export interface CardPatch {
   desc?: string
   pos?: number
   closed?: boolean
+  pinned?: boolean
   idLabels?: string[]
   idMembers?: string[]
   start?: string | null

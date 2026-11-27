@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
 import { parse, stringify } from 'yaml'
-import { LABEL_COLORS, checklistNotes, labelTag, listRequestName, newLabels, noteToPatch, pickLabelColor, parseIndex, parseNote, posBetween, renderBoardNote, renderCard, renderGuideNote, renderIndex, renderListNote, safeName, unlink } from '../src/format'
+import { LABEL_COLORS, checklistNotes, labelTag, listRequestName, newLabels, noteToPatch, pickLabelColor, parseIndex, parseNote, posBetween, renderBoardNote, renderCard, renderGuideNote, renderIndex, renderListNote, safeName, unlink, holdPinned, planIndexMoves, splitPatch } from '../src/format'
 import type { BHCard } from '../src/types'
 
 const yaml = { parse: (s: string) => parse(s), stringify: (o: any) => stringify(o) }
@@ -293,6 +293,95 @@ test('a new label gets a free color the board doesn’t use yet', () => {
   const all = LABEL_COLORS.map((c, i) => ({ id: c, idBoard: 'b', name: c, color: c, pos: i }))
   assert.equal(pickLabelColor(all), 'green')
   assert.equal(pickLabelColor(all.slice(0, 3)), 'red')
+})
+
+// ---------- pinned cards ----------
+
+const pinnedCard: BHCard = { ...card, pinned: true }
+
+test('pinned is written only on a pinned card, and an unpinned card drops the property', () => {
+  assert.doesNotMatch(renderCard(card, ctx, yaml), /pinned/)
+  const text = renderCard(pinnedCard, ctx, yaml)
+  assert.match(text, /pinned: true\n/)
+  assert.deepEqual(noteToPatch(parseNote(text, yaml), safeName(card.name), pinnedCard, ctx, genId).patch, {})
+  assert.doesNotMatch(renderCard(card, ctx, yaml, parseNote(text, yaml).fm), /pinned/)
+})
+
+test('only an explicit pinned true or false changes the pin', () => {
+  const patch = (line: string, c: BHCard | null) => noteToPatch(parseNote(`---\n${line}\n---\n`, yaml), 'C', c, ctx, genId).patch.pinned
+  assert.equal(patch('pinned: true', card), true)
+  assert.equal(patch('pinned: "true"', card), true)
+  assert.equal(patch('pinned: false', pinnedCard), false)
+  assert.equal(patch('pinned: "false"', pinnedCard), false)
+  assert.equal(patch('pinned: true', pinnedCard), undefined)
+  assert.equal(patch('pinned: false', card), undefined)
+  assert.equal(patch('done: false', pinnedCard), undefined) // missing: a note written by 0.3.10
+  assert.equal(patch('pinned:', pinnedCard), undefined)
+  assert.equal(patch('pinned: yes please', card), undefined)
+  assert.equal(patch('pinned: true', null), true)
+  assert.equal(patch('pinned: false', null), undefined)
+})
+
+const at = (id: string, pos: number, more: Partial<BHCard> = {}): BHCard => ({ ...card, id, name: id, pos, ...more })
+const byName = (...cards: BHCard[]) => new Map(cards.map((c) => [c.name, c]))
+const unticked = (cards: Map<string, BHCard>) => new Map([...cards.keys()].map((t) => [t, false]))
+
+test('the Kanban note shows pinned cards first', () => {
+  const text = renderIndex('b', ctx.lists, [at('a', 1), at('p', 900, { pinned: true }), at('b', 2)], (c) => c.name)
+  assert.deepEqual(parseIndex(text)[0].targets, ['p', 'a', 'b'])
+})
+
+test('an untouched Kanban note with a pin far down the list moves nothing', () => {
+  const all = byName(at('p', 900, { pinned: true }), at('a', 1), at('b', 2))
+  const out = planIndexMoves(ctx.lists, [{ list: 'To do', targets: ['p', 'a', 'b'] }], all, unticked(all))
+  assert.deepEqual(out, { moves: [], held: [] })
+})
+
+test('a pinned card dragged to another list stays, its tick is still sent, and other cards move', () => {
+  const all = byName(at('p', 900, { pinned: true }), at('a', 1), at('d', 50, { idList: 'l2' }))
+  const checked = unticked(all).set('p', true)
+  const out = planIndexMoves(ctx.lists, [{ list: 'To do', targets: [] }, { list: 'Done', targets: ['d', 'p', 'a'] }], all, checked)
+  assert.deepEqual(out.held, ['p'])
+  assert.deepEqual(out.moves, [
+    { id: 'p', patch: { dueComplete: true } },
+    { id: 'a', patch: { idList: 'l2', pos: 50 + 65536 } },
+  ])
+})
+
+test('a card dragged above a pin gets a position among the unpinned cards', () => {
+  const all = byName(at('p', 900, { pinned: true }), at('a', 100), at('b', 200))
+  const out = planIndexMoves(ctx.lists, [{ list: 'To do', targets: ['b', 'p', 'a'] }], all, unticked(all))
+  assert.equal(out.moves.length, 1)
+  assert.equal(out.moves[0].id, 'b')
+  assert.equal(out.moves[0].patch.pos, 50)
+  assert.deepEqual(planIndexMoves(ctx.lists, [{ list: 'To do', targets: ['a', 'p', 'b'] }], all, unticked(all)).moves, [])
+})
+
+test('a refused patch is split into the parts that can be refused on their own', () => {
+  assert.deepEqual(splitPatch({ name: 'n', idList: 'l2', pos: 5, pinned: true, dueComplete: true, desc: 'd', ifUpdatedAt: 't' }),
+    [{ name: 'n', desc: 'd' }, { dueComplete: true }, { idList: 'l2', pos: 5 }, { pinned: true }])
+  assert.deepEqual(splitPatch({ pinned: false, idList: 'l2' }), [{ pinned: false, idList: 'l2' }]) // must travel together
+  assert.deepEqual(splitPatch({ pinned: true }), [{ pinned: true }])
+  assert.deepEqual(splitPatch({}), [])
+})
+
+test('a pinned card is held in its list unless the note unpins it', () => {
+  const read = (fm: string, c: BHCard) => holdPinned(noteToPatch(parseNote(`---\n${fm}\n---\nNew text\n`, yaml), safeName(c.name), c, ctx, genId), c)
+  const held = read('list: Done', pinnedCard)
+  assert.equal(held.held, true)
+  assert.equal(held.patch.idList, undefined)
+  assert.equal(held.patch.desc, 'New text') // the rest of the edit still goes
+  const unpinned = read('list: Done\npinned: false', pinnedCard)
+  assert.equal(unpinned.held, false)
+  assert.equal(unpinned.patch.idList, 'l2')
+  assert.equal(unpinned.patch.pinned, false)
+  assert.equal(read('list: Done', card).patch.idList, 'l2')
+  assert.equal(read('list: To do', pinnedCard).held, false)
+  const newList = read('list: Review', pinnedCard) // no empty list is made for a card that can't move there
+  assert.equal(newList.held, true)
+  assert.equal(newList.missing.list, undefined)
+  assert.deepEqual(newList.warnings, [])
+  assert.equal(read('list: Review', card).missing.list, 'Review')
 })
 
 test('which notes in Lists/ ask for a new list', () => {

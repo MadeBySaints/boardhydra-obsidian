@@ -1,6 +1,7 @@
 import { App, Notice, TAbstractFile, TFile, TFolder, normalizePath, parseYaml, stringifyYaml } from 'obsidian'
 import { Api, ApiError } from './api'
-import { BoardCtx, LABEL_COLORS, Missing, Yaml, checklistNotes, labelTag, listRequestName, pickLabelColor, linkTarget, noteFileName, noteToPatch, parseCardNote, parseIndex, parseNote, posBetween, renderBoardNote, renderCard, renderCardNote, renderGuideNote, renderIndex, renderArchiveNote, renderListNote, safeName, unlink, wikiLink } from './format'
+import { BoardCtx, LABEL_COLORS, Missing, Yaml, cardOrder, checklistNotes, holdPinned, labelTag, listRequestName, pickLabelColor, linkTarget, noteFileName, noteToPatch, parseCardNote, parseIndex, parseNote, planIndexMoves, renderBoardNote, renderCard, renderCardNote, renderGuideNote, renderIndex, renderArchiveNote, renderListNote, safeName, splitPatch, unlink, wikiLink } from './format'
+import { confirmArchive } from './confirm'
 import { ColorGroup, allColorGroups, mergeColorGroups, sameGroups, withArchiveFilter } from './graph'
 import type { BHCard, BHEvent, BHLabel, BHList, BHNote, BHSnapshot, CardPatch } from './types'
 
@@ -62,6 +63,11 @@ interface BoardState {
 
 export type Status = { text: string; error?: boolean }
 
+/** What came of a card change: the card as the server now has it, the fields it refused, and why. */
+interface Sent { card: BHCard; refused: string[]; reasons: string[] }
+
+const TEXT_FIELDS = ['name', 'desc', 'checklists', 'links'] // refused edits to these are kept in _conflicts/
+
 export class SyncEngine {
   private boards = new Map<string, BoardState>()
   private pathById = new Map<string, string>()
@@ -70,6 +76,7 @@ export class SyncEngine {
   private selfMoves = new Set<string>() // paths we just renamed to
   private timers = new Map<string, number>()
   private pending = new Set<string>() // card ids with local edits waiting to go up
+  private archiving = new Set<string>() // card ids whose note was deleted or archived here, until that's settled
   private creating = new Set<string>() // paths of new notes being created on the server
   private indexTimers = new Map<string, number>()
   private notePaths = new Map<string, string>() // BoardHydra note id → vault path
@@ -358,6 +365,7 @@ export class SyncEngine {
       return
     }
     if (this.pending.has(c.id)) return // a local edit is on its way up; it carries ifUpdatedAt and settles conflicts
+    if (this.archiving.has(c.id)) return // don't bring the note back while its card is being archived
     let path = this.pathById.get(c.id)
     if (!path || !this.app.vault.getAbstractFileByPath(path)) path = this.findLocal(st, c.id) ?? path // never start a second note for a card
     // restored in BoardHydra: bring its note back out of _archive/ (or drop the stale copy if it already has a live one)
@@ -516,7 +524,7 @@ export class SyncEngine {
 
   /** Board note → list notes → cards (cards link back through `list:`), plus the Kanban note if turned on. */
   private async writeIndex(st: BoardState) {
-    const cards = [...st.cards.values()].filter((c) => !c.closed && this.pathById.has(c.id)).sort((a, b) => a.pos - b.pos)
+    const cards = [...st.cards.values()].filter((c) => !c.closed && this.pathById.has(c.id)).sort(cardOrder)
     const link = (p: string, label: string) => wikiLink(p.replace(/\.md$/, ''), label)
     const paths = this.listPaths(st)
     const lists = st.snap.lists.filter((l) => paths.has(l.id)).sort((a, b) => a.pos - b.pos)
@@ -768,41 +776,62 @@ export class SyncEngine {
     if (id && !card) return // not on this board any more (archived or moved); nothing to update
     if (!id && !text.trim()) return // a fresh empty note: wait until it has something
     if (!id && f.basename.startsWith('_')) return // the plugin's own notes (_Kanban) are never cards
-    let result = noteToPatch(parsed, f.basename, card, this.ctx(st), genId)
+    const read = () => holdPinned(noteToPatch(parsed, f.basename, card, this.ctx(st), genId), card)
+    let result = read()
     if (this.s().createFromNotes !== false && (result.missing.list || result.missing.labels.length)) {
       // lists and labels the note names but the board lacks: make them, then read the note again
       await this.makeMissing(st, result.missing)
-      result = noteToPatch(parsed, f.basename, card, this.ctx(st), genId)
+      result = read()
     }
-    const { patch, warnings } = result
+    const { patch, warnings, held } = result
     if (warnings.length) new Notice('BoardHydra: ' + warnings.join(' · '), 8000)
 
     if (!card) {
       const open = st.snap.lists.filter((l) => !l.closed).sort((a, b) => a.pos - b.pos)
       const idList = patch.idList ?? open[0]?.id
       if (!idList) return
+      const { pinned, ...fields } = patch // a card can't be created pinned: create it, then pin it
       this.creating.add(path)
       try {
-        const created = await this.api.createCard(st.id, { ...patch, idList, name: patch.name ?? f.basename })
+        let created = await this.api.createCard(st.id, { ...fields, idList, name: patch.name ?? f.basename })
         this.pathById.set(created.id, path)
-        await this.applyRemote(st, created)
-        this.scheduleIndex(st)
+        try {
+          if (pinned) {
+            const sent = await this.sendPatch(st, created, { pinned })
+            created = sent.card
+            if (sent.reasons.length) new Notice(`BoardHydra: added “${created.name}” without a pin — ${sent.reasons.join(' · ')}`, 12000)
+          }
+        } finally {
+          // even if pinning failed, the note must get its card's id, or the next save would make a second card
+          await this.applyRemote(st, created)
+          this.scheduleIndex(st)
+        }
       } finally {
         this.creating.delete(path)
       }
       return
     }
 
+    const heldNotice = () => { if (held) new Notice(`BoardHydra: “${card.name}” is pinned. Set \`pinned: false\` to move it.`, 10000) }
     if (!Object.keys(patch).length) {
-      // nothing the card holds changed (maybe only spacing); put the note back in the usual shape quietly
+      // nothing the card holds changed (maybe only spacing): leave the note alone, unless a move was held back
+      if (held) {
+        this.pending.delete(card.id)
+        await this.applyRemote(st, st.cards.get(card.id) ?? card)
+        heldNotice()
+      }
       return
     }
-    const sent: CardPatch = { ...patch, ifUpdatedAt: typeof parsed.fm.bh_updated === 'string' ? parsed.fm.bh_updated : card.dateLastActivity }
+    const ifUpdatedAt = typeof parsed.fm.bh_updated === 'string' ? parsed.fm.bh_updated : card.dateLastActivity
     try {
-      const updated = await this.api.updateCard(card.id, sent)
+      const { card: updated, refused, reasons } = await this.sendPatch(st, card, { ...patch, ifUpdatedAt })
+      const lostText = refused.some((k) => TEXT_FIELDS.includes(k))
+      if (lostText) await this.saveConflict(st, f, text)
       this.pending.delete(card.id)
       await this.applyRemote(st, updated)
-      if (patch.idList || patch.name || patch.dueComplete !== undefined) this.scheduleIndex(st)
+      if (held || refused.length || patch.idList || patch.name || patch.dueComplete !== undefined || patch.pinned !== undefined) this.scheduleIndex(st)
+      heldNotice()
+      if (reasons.length) new Notice(`BoardHydra: “${card.name}”: ${reasons.join(' · ')}. That change was undone${lostText ? `; your version is in ${CONFLICTS}/` : ''}.`, 12000)
     } catch (e) {
       const theirs = e instanceof ApiError && e.status === 409 ? (e.body as { card?: BHCard } | null)?.card : undefined
       if (!theirs) throw e
@@ -813,12 +842,59 @@ export class SyncEngine {
     }
   }
 
+  /**
+   * Sends a card change. If the server refuses it (no permission, pinned, waiting for sign-offs, no pin left), its
+   * parts are sent one by one, so what is allowed still lands. A conflict and every other error are thrown.
+   */
+  private async sendPatch(st: BoardState, card: BHCard, patch: CardPatch): Promise<Sent> {
+    const known = () => st.cards.get(card.id) ?? card
+    const groups = splitPatch(patch)
+    try {
+      return { card: await this.api.updateCard(card.id, patch), refused: [], reasons: [] }
+    } catch (e) {
+      const why = await this.refusal(e, patch)
+      if (groups.length < 2) return { card: known(), refused: groups.flatMap((g) => Object.keys(g)), reasons: [why] }
+    }
+    const refused: string[] = []
+    const reasons = new Set<string>()
+    let seen = patch.ifUpdatedAt
+    let landed: BHCard | undefined
+    for (const group of groups) {
+      try {
+        landed = await this.api.updateCard(card.id, seen === undefined ? group : { ...group, ifUpdatedAt: seen })
+        if (seen !== undefined) seen = landed.dateLastActivity
+      } catch (e) {
+        reasons.add(await this.refusal(e, group))
+        refused.push(...Object.keys(group))
+      }
+    }
+    return { card: landed ?? known(), refused, reasons: [...reasons] }
+  }
+
+  /** The server's reason when it refused this change (so nothing changed); any other error is thrown on. */
+  private async refusal(e: unknown, patch: CardPatch): Promise<string> {
+    if (!(e instanceof ApiError)) throw e
+    const conflict = e.status === 409 && !!(e.body as { card?: BHCard } | null)?.card
+    if (e.status === 403 || e.status === 422 || (e.status === 409 && !conflict)) return e.message
+    if (e.status !== 402 || patch.pinned !== true) throw e
+    // 402 means "no pin left", but also "Pro lapsed", which answers every call that way: only that stops the sync
+    try {
+      await this.api.me()
+    } catch (me) {
+      if (me instanceof ApiError && (me.status === 401 || me.status === 402)) throw me
+    }
+    return e.message
+  }
+
   private async saveConflict(st: BoardState, f: TFile, text: string) {
     const dir = normalizePath(`${st.folder}/${CONFLICTS}`)
     await this.ensureFolder(dir)
     const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ').replace(':', '.')
     const body = text.replace(/^bh_id:.*$/m, '').replace(/^bh_updated:.*$/m, '') // a conflict copy is never a card
-    await this.app.vault.create(normalizePath(`${dir}/${f.basename} (conflict ${stamp}).md`), body)
+    const base = `${dir}/${f.basename} (conflict ${stamp}`
+    let path = normalizePath(`${base}).md`)
+    for (let n = 2; this.app.vault.getAbstractFileByPath(path); n++) path = normalizePath(`${base}, ${n}).md`)
+    await this.app.vault.create(path, body)
   }
 
   /** Cards dragged between lists (or reordered, or ticked) in the board's Kanban note. */
@@ -839,34 +915,26 @@ export class SyncEngine {
         byTarget.set(p.replace(/\.md$/, '').split('/').pop()!, c)
       }
     }
-    const lists = st.snap.lists.filter((l) => !l.closed)
-    for (const sec of parseIndex(text)) {
-      const list = lists.find((l) => l.name === sec.list)
-      if (!list) continue // new lists are made in BoardHydra
-      const seq = sec.targets.map((t) => ({ t, c: byTarget.get(t) })).filter((x): x is { t: string; c: BHCard } => !!x.c)
-      let prev: number | undefined
-      for (let i = 0; i < seq.length; i++) {
-        const { t, c } = seq[i]
-        let next: number | undefined
-        for (let j = i + 1; j < seq.length; j++) {
-          const n = seq[j].c
-          if (n.idList === list.id && (prev === undefined || n.pos > prev)) { next = n.pos; break }
-        }
-        const inPlace = c.idList === list.id && (prev === undefined || c.pos > prev) && (next === undefined || c.pos < next)
-        const p: CardPatch = {}
-        if (!inPlace) { p.idList = list.id; p.pos = posBetween(prev, next) }
-        const done = checked.get(t)
-        if (done !== undefined && done !== c.dueComplete) p.dueComplete = done
-        if (Object.keys(p).length) {
-          const updated = await this.api.updateCard(c.id, p)
-          await this.applyRemote(st, updated)
-          prev = updated.pos
-        } else {
-          prev = c.pos
+    const { moves, held } = planIndexMoves(st.snap.lists, parseIndex(text), byTarget, checked)
+    const failed: string[] = []
+    try {
+      for (const m of moves) {
+        const card = st.cards.get(m.id)
+        if (!card) continue
+        try {
+          const sent = await this.sendPatch(st, card, m.patch)
+          await this.applyRemote(st, sent.card)
+          if (sent.reasons.length) failed.push(`“${card.name}”: ${sent.reasons.join(' · ')}`)
+        } catch (e) {
+          if (e instanceof ApiError && (e.status === 401 || e.status === 402)) throw e
+          failed.push(`“${card.name}”: ${(e as Error).message}`) // one card that can't change doesn't stop the others
         }
       }
+      if (held.length) new Notice(`BoardHydra: pinned cards stay in their list (${held.map((n) => `“${n}”`).join(', ')}). Set \`pinned: false\` in a card’s note to move it.`, 10000)
+      if (failed.length) new Notice(`BoardHydra: ${failed.join('; ')}`, 12000)
+    } finally {
+      this.scheduleIndex(st) // the Kanban note shows what BoardHydra has again
     }
-    this.scheduleIndex(st)
   }
 
   /** A note in <board>/Notes changed: send its text up (your own notes), or start a new one on its card. */
@@ -1047,17 +1115,55 @@ export class SyncEngine {
     this.archiveRemote(id)
   }
 
-  /** A note deleted (or moved to _archive) in the vault archives its card; nothing is deleted in BoardHydra. */
+  /**
+   * A note deleted (or moved to _archive) in the vault archives its card; nothing is deleted in BoardHydra.
+   * A pinned card is asked about first, as in BoardHydra.
+   */
   private archiveRemote(id: string) {
     if (this.stopped || this.paused) return
     for (const st of this.boards.values()) {
       const c = st.cards.get(id)
       if (!c || c.closed) continue
-      this.api.updateCard(id, { closed: true }).then((u) => {
-        st.cards.set(id, u)
-        this.scheduleIndex(st)
-        new Notice(`BoardHydra: archived “${c.name}”. Restore it from the board’s archive in BoardHydra.`)
-      }).catch((e) => { if (!this.handleFatal(e)) new Notice('BoardHydra: ' + (e as Error).message) })
+      this.pathById.delete(id) // the note has left the board's folder, whatever happens next
+      this.pending.delete(id)
+      this.archiving.add(id)
+      this.settleArchive(st.id, c)
+        .catch((e) => { if (!this.handleFatal(e)) new Notice(`BoardHydra: ${(e as Error).message}. “${c.name}” comes back at the next sync.`, 8000) })
+        .finally(() => this.archiving.delete(id))
     }
+  }
+
+  /** Archives the card, or brings its note back if the user keeps it or may not archive it. */
+  private async settleArchive(boardId: string, card: BHCard) {
+    const keep = !!card.pinned && !(await confirmArchive(this.app, card.name))
+    if (this.stopped || this.paused) return
+    let archived: BHCard | undefined
+    if (!keep) {
+      try {
+        archived = await this.api.updateCard(card.id, { closed: true })
+        new Notice(`BoardHydra: archived “${card.name}”${card.pinned ? ' and removed its pin' : ''}. Restore it from the board’s archive in BoardHydra.`)
+      } catch (e) {
+        if (!(e instanceof ApiError) || e.status !== 403) throw e
+        new Notice(`BoardHydra: “${card.name}” wasn’t archived — ${e.message}`, 10000)
+      }
+    }
+    await this.enqueue(boardId, async () => {
+      this.archiving.delete(card.id)
+      const st = this.boards.get(boardId) // the board may have been loaded again while we waited
+      if (!st) return
+      if (archived) {
+        const back = this.findLocal(st, card.id) // moved back, or written again, while we waited
+        if (back) this.pathById.set(card.id, back)
+        await this.applyRemote(st, archived)
+      } else {
+        // without its old path, applyRemote moves the note back out of _archive/ (or writes a deleted one again).
+        // With it, a live note plus an archived copy would look like a leftover, and the moved note would be trashed
+        this.pathById.delete(card.id)
+        this.pending.delete(card.id)
+        const now = st.cards.get(card.id)
+        if (now) await this.applyRemote(st, now)
+      }
+      this.scheduleIndex(st)
+    })
   }
 }
